@@ -114,6 +114,54 @@ def test_update_llm_settings_persists_project_env(
     assert "sk-or-v1-your-key-here" not in env_text
 
 
+def test_update_openai_responses_settings_supports_xhigh(
+    client: TestClient, tmp_path: Path,
+) -> None:
+    response = client.put(
+        "/settings/llm",
+        json={
+            "provider": "openai-responses",
+            "model_name": "gpt-5.5",
+            "base_url": "https://api.example.test/v1",
+            "api_key": "responses-secret-value",
+            "temperature": 0.0,
+            "timeout_seconds": 120,
+            "max_retries": 2,
+            "reasoning_effort": "xhigh",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["provider"] == "openai-responses"
+    assert body["api_key_configured"] is True
+    assert body["reasoning_effort"] == "xhigh"
+    assert "responses-secret-value" not in response.text
+
+    env_text = (tmp_path / ".env").read_text(encoding="utf-8")
+    assert "OPENAI_RESPONSES_API_KEY=responses-secret-value" in env_text
+    assert "OPENAI_RESPONSES_BASE_URL=https://api.example.test/v1" in env_text
+    assert "LANGCHAIN_REASONING_EFFORT=xhigh" in env_text
+
+
+def test_update_openai_responses_rejects_non_loopback_http(
+    client: TestClient,
+) -> None:
+    response = client.put(
+        "/settings/llm",
+        json={
+            "provider": "openai-responses",
+            "model_name": "gpt-5.5",
+            "base_url": "http://api.example.test/v1",
+            "api_key": "responses-secret-value",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "must use HTTPS" in response.json()["detail"]
+    assert "responses-secret-value" not in response.text
+
+
 def test_get_data_source_settings_treats_placeholder_as_unconfigured(
     client: TestClient, tmp_path: Path,
 ) -> None:

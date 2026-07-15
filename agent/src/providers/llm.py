@@ -483,6 +483,21 @@ def _sync_provider_env() -> None:
         os.environ.pop("OPENAI_API_KEY", None)
         return
 
+    if provider in {"openai-responses", "openai_responses"}:
+        api_key = os.getenv("OPENAI_RESPONSES_API_KEY", "")
+        base_url = os.getenv("OPENAI_RESPONSES_BASE_URL", "")
+        if api_key:
+            os.environ["OPENAI_API_KEY"] = api_key
+        else:
+            os.environ.pop("OPENAI_API_KEY", None)
+        if base_url:
+            os.environ["OPENAI_API_BASE"] = base_url
+            os.environ["OPENAI_BASE_URL"] = base_url
+        else:
+            os.environ.pop("OPENAI_API_BASE", None)
+            os.environ.pop("OPENAI_BASE_URL", None)
+        return
+
     key_env, base_env = provider_env_names(provider, get_env_config().llm.langchain_model_name)
 
     # Resolve API key: provider-specific env → OPENAI_API_KEY fallback
@@ -595,6 +610,20 @@ def build_llm(*, model_name: Optional[str] = None, callbacks: Any = None) -> Any
             model=name,
             temperature=temperature,
             timeout=get_env_config().llm.timeout_seconds,
+            reasoning_effort=effort or None,
+        )
+
+    if provider in {"openai-responses", "openai_responses"}:
+        from src.providers.openai_responses import OpenAIResponsesLLM
+
+        effort = get_env_config().llm.langchain_reasoning_effort.strip().lower()
+        return OpenAIResponsesLLM(
+            model=name,
+            api_key=os.getenv("OPENAI_RESPONSES_API_KEY", ""),
+            base_url=os.getenv("OPENAI_RESPONSES_BASE_URL", ""),
+            temperature=temperature,
+            timeout=get_env_config().llm.timeout_seconds,
+            max_retries=get_env_config().llm.max_retries,
             reasoning_effort=effort or None,
         )
 

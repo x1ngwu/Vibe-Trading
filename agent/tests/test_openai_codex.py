@@ -113,6 +113,22 @@ def test_sse_events_parse_text_and_function_calls() -> None:
     assert chunks[1].tool_calls == [{"id": "call_1|fc_1", "name": "bash", "args": {"command": "pwd"}}]
 
 
+def test_sse_completed_event_maps_usage_metadata() -> None:
+    chunks = list(_message_chunks_from_events([{
+        "type": "response.completed",
+        "response": {
+            "status": "completed",
+            "usage": {"input_tokens": 5, "output_tokens": 3, "total_tokens": 8},
+        },
+    }]))
+
+    assert chunks[0].usage_metadata == {
+        "input_tokens": 5,
+        "output_tokens": 3,
+        "total_tokens": 8,
+    }
+
+
 def test_stream_non_200_response_raises_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
     class _FakeResponse:
         status_code = 401

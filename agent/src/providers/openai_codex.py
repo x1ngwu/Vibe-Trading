@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Optional
 from urllib.parse import urlparse
@@ -47,6 +46,7 @@ class CodexAIMessage:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     additional_kwargs: dict[str, Any] = field(default_factory=dict)
     response_metadata: dict[str, Any] = field(default_factory=lambda: {"finish_reason": "stop"})
+    usage_metadata: dict[str, int] | None = None
 
     def __add__(self, other: "CodexAIMessage") -> "CodexAIMessage":
         finish_reason = other.response_metadata.get(
@@ -62,6 +62,7 @@ class CodexAIMessage:
             tool_calls=[*self.tool_calls, *other.tool_calls],
             additional_kwargs={"reasoning_content": reasoning} if reasoning else {},
             response_metadata={"finish_reason": finish_reason},
+            usage_metadata=other.usage_metadata or self.usage_metadata,
         )
 
 
@@ -263,6 +264,54 @@ def _map_finish_reason(status: str | None) -> str:
     }.get(status or "completed", "stop")
 
 
+def _usage_metadata(response: dict[str, Any]) -> dict[str, int] | None:
+    usage = response.get("usage") or {}
+    if not isinstance(usage, dict):
+        return None
+    input_tokens = usage.get("input_tokens")
+    output_tokens = usage.get("output_tokens")
+    total_tokens = usage.get("total_tokens")
+    if not all(isinstance(value, int) for value in (input_tokens, output_tokens)):
+        return None
+    if not isinstance(total_tokens, int):
+        total_tokens = input_tokens + output_tokens
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+    }
+
+
+def _build_responses_body(
+    *,
+    model: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    reasoning_effort: str | None,
+    stream: bool,
+) -> dict[str, Any]:
+    """Build the shared Responses payload for OAuth and API-key transports."""
+    system_prompt, input_items = _convert_messages(messages)
+    body: dict[str, Any] = {
+        "model": _strip_model_prefix(model),
+        "store": False,
+        "stream": stream,
+        "instructions": system_prompt,
+        "input": input_items,
+        "text": {"verbosity": "medium"},
+        "include": ["reasoning.encrypted_content"],
+        "prompt_cache_key": _prompt_cache_key(messages),
+        "tool_choice": "auto",
+        "parallel_tool_calls": True,
+    }
+    converted_tools = _convert_tools(tools)
+    if converted_tools:
+        body["tools"] = converted_tools
+    if reasoning_effort and reasoning_effort.lower() != "none":
+        body["reasoning"] = {"effort": reasoning_effort.lower()}
+    return body
+
+
 def _events_from_lines(lines: Iterable[str]) -> Iterable[dict[str, Any]]:
     buffer: list[str] = []
 
@@ -330,8 +379,12 @@ def _message_chunks_from_events(events: Iterable[dict[str, Any]]) -> Iterable[Co
                 )
                 yield CodexAIMessage(tool_calls=[tool.as_langchain_tool_call()])
         elif event_type == "response.completed":
-            status = (event.get("response") or {}).get("status")
-            yield CodexAIMessage(response_metadata={"finish_reason": _map_finish_reason(status)})
+            response = event.get("response") or {}
+            status = response.get("status")
+            yield CodexAIMessage(
+                response_metadata={"finish_reason": _map_finish_reason(status)},
+                usage_metadata=_usage_metadata(response),
+            )
         elif event_type in {"error", "response.failed"}:
             detail = event.get("error") or event.get("message") or event
             raise RuntimeError(f"OpenAI Codex response failed: {str(detail)[:500]}")
@@ -372,25 +425,13 @@ class OpenAICodexLLM:
         )
 
     def _body(self, messages: list[dict[str, Any]], *, stream: bool) -> dict[str, Any]:
-        system_prompt, input_items = _convert_messages(messages)
-        body: dict[str, Any] = {
-            "model": _strip_model_prefix(self.model),
-            "store": False,
-            "stream": stream,
-            "instructions": system_prompt,
-            "input": input_items,
-            "text": {"verbosity": "medium"},
-            "include": ["reasoning.encrypted_content"],
-            "prompt_cache_key": _prompt_cache_key(messages),
-            "tool_choice": "auto",
-            "parallel_tool_calls": True,
-        }
-        tools = _convert_tools(self.tools)
-        if tools:
-            body["tools"] = tools
-        if self.reasoning_effort and self.reasoning_effort.lower() != "none":
-            body["reasoning"] = {"effort": self.reasoning_effort.lower()}
-        return body
+        return _build_responses_body(
+            model=self.model,
+            messages=messages,
+            tools=self.tools,
+            reasoning_effort=self.reasoning_effort,
+            stream=stream,
+        )
 
     def _headers(self) -> dict[str, str]:
         token = _get_codex_token()

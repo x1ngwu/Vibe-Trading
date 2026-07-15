@@ -526,8 +526,19 @@ vibe-trading-mcp               # start MCP server (stdio)
 - **Python 3.11+** for Path B
 - **Docker** for Path A
 - OpenAI Codex can also be used with ChatGPT OAuth: set `LANGCHAIN_PROVIDER=openai-codex`, then run `vibe-trading provider login openai-codex`. This does not use `OPENAI_API_KEY`.
+- OpenAI-compatible gateways that expose the Responses API can use the separate API-key provider:
 
-> **Supported LLM providers:** OpenRouter, Requesty, OpenAI, DeepSeek, Gemini, Groq, DashScope/Qwen, Zhipu, Moonshot/Kimi, MiniMax, Xiaomi MIMO, Z.ai, Ollama (local). See `.env.example` for config.
+  ```dotenv
+  LANGCHAIN_PROVIDER=openai-responses
+  LANGCHAIN_MODEL_NAME=gpt-5.5
+  OPENAI_RESPONSES_API_KEY=your-api-key
+  OPENAI_RESPONSES_BASE_URL=https://api.example.com/v1
+  ```
+
+  The adapter appends `/responses` when the base URL does not already include it. Do not put a
+  ChatGPT OAuth token in `OPENAI_RESPONSES_API_KEY`; OAuth remains isolated to `openai-codex`.
+
+> **Supported LLM providers:** OpenRouter, Requesty, OpenAI Chat Completions, OpenAI Responses (API key), OpenAI Codex (ChatGPT OAuth), DeepSeek, Gemini, Groq, DashScope/Qwen, Zhipu, Moonshot/Kimi, MiniMax, Xiaomi MIMO, Z.ai, Ollama (local). See `.env.example` for config.
 
 > **Tip:** All markets work without any API keys thanks to automatic fallback. yfinance (HK/US), OKX (crypto), mootdx (A-shares, TCP-direct, no IP throttle), and AKShare (A-shares, US, HK, futures, forex) are all free. Tushare token is optional — mootdx is the preferred no-token A-share fallback, with AKShare as a broader backup.
 
@@ -623,7 +634,7 @@ Copy `agent/.env.example` to `agent/.env` and uncomment the provider block you w
 | `VIBE_TRADING_ALLOWED_RUN_ROOTS` | No | Extra comma-separated roots for generated-code run directories |
 | `CONTENT_FILTER_WARNING_THRESHOLD` | No | Content-filter warning ratio threshold (default 0.05 = 5%). When the ratio of LLM responses blocked by content moderation exceeds this, the run card warns you to switch providers. |
 
-<sub>* Ollama does not require an API key. OpenAI Codex uses ChatGPT OAuth and stores tokens via `oauth-cli-kit`, not in `agent/.env`.</sub>
+<sub>* Ollama does not require an API key. OpenAI Codex uses ChatGPT OAuth and stores tokens via `oauth-cli-kit`, not in `agent/.env`. The separate `openai-responses` provider uses an ordinary API key and never reads the Codex OAuth token.</sub>
 
 **Free data (no key needed):** A-shares via AKShare, HK/US equities via yfinance, crypto via OKX, 100+ crypto exchanges via CCXT. The system automatically selects the best available source for each market.
 

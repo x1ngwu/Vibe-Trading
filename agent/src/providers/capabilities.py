@@ -95,6 +95,11 @@ _ZHIPU_CAPABILITIES = ProviderCapabilities(
 )
 
 _OPENAI_CODEX_CAPABILITIES = ProviderCapabilities("openai-codex", None, "OPENAI_CODEX_BASE_URL")
+_OPENAI_RESPONSES_CAPABILITIES = ProviderCapabilities(
+    "openai-responses",
+    "OPENAI_RESPONSES_API_KEY",
+    "OPENAI_RESPONSES_BASE_URL",
+)
 
 
 _PROVIDERS: dict[str, ProviderCapabilities] = {
@@ -143,6 +148,8 @@ _PROVIDERS: dict[str, ProviderCapabilities] = {
     "ollama": ProviderCapabilities("ollama", None, "OLLAMA_BASE_URL"),
     "openai-codex": _OPENAI_CODEX_CAPABILITIES,
     "openai_codex": _OPENAI_CODEX_CAPABILITIES,
+    "openai-responses": _OPENAI_RESPONSES_CAPABILITIES,
+    "openai_responses": _OPENAI_RESPONSES_CAPABILITIES,
     "opencode-zen": ProviderCapabilities("opencode-zen", "OPENAI_API_KEY", "OPENAI_BASE_URL"),
     "opencode-go": ProviderCapabilities("opencode-go", "OPENAI_API_KEY", "OPENAI_BASE_URL"),
 }

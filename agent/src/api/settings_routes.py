@@ -118,7 +118,7 @@ def _load_llm_providers() -> List[LLMProviderOption]:
 
 LLM_PROVIDERS = _load_llm_providers()
 LLM_PROVIDER_BY_NAME = {provider.name: provider for provider in LLM_PROVIDERS}
-LLM_REASONING_EFFORTS = {"", "low", "medium", "high", "max"}
+LLM_REASONING_EFFORTS = {"", "low", "medium", "high", "xhigh", "max"}
 LLM_API_KEY_PLACEHOLDERS = {"", "sk-or-v1-your-key-here", "sk-xxx", "xxx", "gsk_xxx"}
 TUSHARE_TOKEN_PLACEHOLDERS = {"", "your-tushare-token"}
 
@@ -345,7 +345,7 @@ def register_settings_routes(
         if reasoning_effort not in LLM_REASONING_EFFORTS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Reasoning effort must be low, medium, high, or max",
+                detail="Reasoning effort must be low, medium, high, xhigh, or max",
             )
 
         current_values = _read_settings_env_values()
@@ -357,6 +357,15 @@ def register_settings_routes(
                 from src.providers.openai_codex import validate_codex_base_url
 
                 base_url = validate_codex_base_url(base_url)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+                ) from exc
+        elif provider.name == "openai-responses":
+            try:
+                from src.providers.openai_responses import validate_responses_base_url
+
+                base_url = validate_responses_base_url(base_url)
             except ValueError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)

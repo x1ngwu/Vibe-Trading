@@ -560,6 +560,7 @@ export function Settings() {
                 <option value="low">low</option>
                 <option value="medium">medium</option>
                 <option value="high">high</option>
+                <option value="xhigh">xhigh</option>
                 <option value="max">max</option>
               </select>
               <span className={hintClass}>{"How hard the model thinks before answering. Higher is more thorough but slower; leave Off for fastest replies."}</span>
