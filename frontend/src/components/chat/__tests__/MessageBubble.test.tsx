@@ -16,6 +16,11 @@ vi.mock("../RunCompleteCard", () => ({
     <div data-testid="run-complete-card">Run: {msg.runId}</div>
   ),
 }));
+vi.mock("@/components/visualizations/VisualizationRenderer", () => ({
+  VisualizationRenderer: ({ runId, visualizations }: { runId?: string; visualizations?: unknown[] }) => (
+    visualizations?.length ? <div data-testid="visualization-renderer">Chart: {runId}</div> : null
+  ),
+}));
 
 function makeMsg(overrides: Partial<AgentMessage> = {}): AgentMessage {
   return {
@@ -44,6 +49,19 @@ describe("MessageBubble", () => {
     it("renders markdown content", () => {
       render(<MessageBubble msg={makeMsg({ type: "answer", content: "Here is the **analysis**" })} />);
       expect(screen.getByTestId("markdown")).toHaveTextContent("Here is the **analysis**");
+    });
+
+    it("renders persisted visualizations below an answer", () => {
+      render(<MessageBubble msg={makeMsg({
+        runId: "run-chart",
+        visualizations: [{
+          schema_version: 1,
+          type: "candlestick_volume",
+          visualization_id: "kline_demo",
+          data_ref: "kline_demo",
+        }],
+      })} />);
+      expect(screen.getByTestId("visualization-renderer")).toHaveTextContent("run-chart");
     });
   });
 

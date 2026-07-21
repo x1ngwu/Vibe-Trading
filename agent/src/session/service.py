@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -23,6 +25,73 @@ from src.session.models import (
 )
 from src.session.search import get_shared_index
 from src.session.store import SessionStore
+
+
+_VISUALIZATION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+_VISUALIZATION_STRING_FIELDS = (
+    "title",
+    "symbol",
+    "market",
+    "timeframe",
+    "source",
+    "adjustment",
+    "timezone",
+    "requested_start",
+    "requested_end",
+    "effective_fetch_start",
+    "effective_fetch_end",
+    "retention_policy",
+    "actual_start",
+    "actual_end",
+    "fetched_at",
+    "fallback_text",
+)
+
+
+def load_visualization_specs(run_dir: Path) -> list[Dict[str, Any]]:
+    """Load and sanitize chat visualization metadata from a run artifact."""
+    manifest_path = run_dir / "artifacts" / "visualizations.json"
+    try:
+        if not manifest_path.is_file() or manifest_path.stat().st_size > 256_000:
+            return []
+        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(raw, list):
+        return []
+
+    specs: list[Dict[str, Any]] = []
+    for item in raw[-5:]:
+        if not isinstance(item, dict):
+            continue
+        visualization_id = item.get("visualization_id")
+        data_ref = item.get("data_ref")
+        if (
+            item.get("schema_version") != 1
+            or item.get("type") != "candlestick_volume"
+            or not isinstance(visualization_id, str)
+            or not _VISUALIZATION_ID_RE.fullmatch(visualization_id)
+            or not isinstance(data_ref, str)
+            or data_ref != visualization_id
+        ):
+            continue
+        spec: Dict[str, Any] = {
+            "schema_version": 1,
+            "type": "candlestick_volume",
+            "visualization_id": visualization_id,
+            "data_ref": data_ref,
+        }
+        for key in _VISUALIZATION_STRING_FIELDS:
+            value = item.get(key)
+            if isinstance(value, str):
+                spec[key] = value[:500]
+        bar_count = item.get("bar_count")
+        if isinstance(bar_count, int) and 0 <= bar_count <= 10_000:
+            spec["bar_count"] = bar_count
+        if isinstance(item.get("truncated"), bool):
+            spec["truncated"] = item["truncated"]
+        specs.append(spec)
+    return specs
 
 
 class SessionService:
@@ -165,8 +234,12 @@ class SessionService:
 
             self.store.update_attempt(attempt)
             reply_metadata = {}
+            visualizations: list[Dict[str, Any]] = []
             if attempt.run_dir:
                 reply_metadata["run_id"] = Path(attempt.run_dir).name
+                visualizations = load_visualization_specs(Path(attempt.run_dir))
+                if visualizations:
+                    reply_metadata["visualizations"] = visualizations
             reply_metadata["status"] = attempt.status.value
             if attempt.metrics:
                 reply_metadata["metrics"] = attempt.metrics
@@ -183,7 +256,8 @@ class SessionService:
                 session.session_id,
                 "attempt.completed" if attempt.status == AttemptStatus.COMPLETED else "attempt.failed",
                 {"attempt_id": attempt.attempt_id, "status": attempt.status.value,
-                 "summary": attempt.summary, "error": attempt.error, "run_dir": attempt.run_dir},
+                 "summary": attempt.summary, "error": attempt.error, "run_dir": attempt.run_dir,
+                 "visualizations": visualizations},
             )
 
         except Exception as exc:

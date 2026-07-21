@@ -37,6 +37,31 @@ export interface SwarmRunStatus {
   agents: SwarmAgentStatus[];
 }
 
+export interface VisualizationSpec {
+  schema_version: 1;
+  type: "candlestick_volume";
+  visualization_id: string;
+  data_ref: string;
+  title?: string;
+  symbol?: string;
+  market?: string;
+  timeframe?: string;
+  source?: string;
+  adjustment?: string;
+  timezone?: string;
+  requested_start?: string;
+  requested_end?: string;
+  effective_fetch_start?: string;
+  effective_fetch_end?: string;
+  retention_policy?: string;
+  actual_start?: string;
+  actual_end?: string;
+  fetched_at?: string;
+  bar_count?: number;
+  truncated?: boolean;
+  fallback_text?: string;
+}
+
 export interface AgentMessage {
   id: string;
   type: AgentMessageType;
@@ -51,6 +76,7 @@ export interface AgentMessage {
   swarmStatus?: SwarmRunStatus;
   metrics?: Record<string, number>;
   equityCurve?: Array<{ time: string; equity: number | string }>;
+  visualizations?: VisualizationSpec[];
   /** Phase label for thinking entries */
   stage?: string;
   /** Shadow Account id if render_shadow_report fired in this turn (RunCompleteCard renders a "View Shadow Report" button). */

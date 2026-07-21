@@ -24,12 +24,12 @@ echarts.use([
 
 export const CHART_GROUP = "quant-charts";
 
-let _connected = false;
+const connectedGroups = new Set<string>();
 
-export function connectCharts() {
-  if (!_connected) {
-    echarts.connect(CHART_GROUP);
-    _connected = true;
+export function connectCharts(group = CHART_GROUP) {
+  if (!connectedGroups.has(group)) {
+    echarts.connect(group);
+    connectedGroups.add(group);
   }
 }
 

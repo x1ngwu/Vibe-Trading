@@ -10,7 +10,7 @@ import { echarts, CHART_GROUP, connectCharts } from "@/lib/echarts";
 import { useDarkMode } from "@/hooks/useDarkMode";
 
 type Sub = "vol" | "macd" | "rsi" | "kdj";
-type Range = "1M" | "3M" | "6M" | "1Y" | "ALL";
+export type ChartRangePreset = "1D" | "5D" | "1M" | "3M" | "6M" | "1Y" | "3Y" | "5Y" | "ALL";
 type Overlay = "ma5" | "ma10" | "ma20" | "ma60" | "ema12" | "ema26" | "boll";
 
 const OVERLAY_OPTIONS: { id: Overlay; label: string; group: string }[] = [
@@ -23,24 +23,123 @@ const OVERLAY_OPTIONS: { id: Overlay; label: string; group: string }[] = [
   { id: "boll", label: "BOLL", group: "Channel" },
 ];
 
-const RANGE_BARS: Record<Range, number> = { "1M": 22, "3M": 63, "6M": 126, "1Y": 252, ALL: Infinity };
+const DAILY_RANGE_OPTIONS: ChartRangePreset[] = ["1M", "3M", "6M", "1Y", "3Y", "5Y", "ALL"];
+const INTRADAY_RANGE_OPTIONS: ChartRangePreset[] = ["1D", "5D", "1M", "3M", "ALL"];
+const RANGE_DAYS: Partial<Record<ChartRangePreset, number>> = {
+  "1D": 1,
+  "5D": 5,
+  "1M": 31,
+  "3M": 92,
+  "6M": 183,
+  "1Y": 365,
+  "3Y": 1095,
+  "5Y": 1825,
+};
 const OVERLAY_COLORS = ["#f59e0b", "#8b5cf6", "#3b82f6", "#ec4899", "#10b981", "#f97316", "#6366f1"];
+
+export function isIntradayTimeframe(timeframe: string | undefined, data: PriceBar[] = []): boolean {
+  if (timeframe) return ["1m", "5m", "15m", "30m", "1H"].includes(timeframe);
+  return data.some((bar) => bar.time.includes("T") || /\d{2}:\d{2}/.test(bar.time));
+}
+
+export function getRangeOptions(timeframe: string | undefined, data: PriceBar[] = []): ChartRangePreset[] {
+  return isIntradayTimeframe(timeframe, data) ? INTRADAY_RANGE_OPTIONS : DAILY_RANGE_OPTIONS;
+}
+
+export function rangeStartPercent(data: PriceBar[], range: ChartRangePreset): number {
+  if (range === "ALL" || data.length < 2) return 0;
+  const days = RANGE_DAYS[range];
+  if (!days) return 0;
+  const lastTime = Date.parse(data[data.length - 1].time.replace(" ", "T"));
+  if (!Number.isFinite(lastTime)) return 0;
+  const threshold = lastTime - days * 86_400_000;
+  const startIndex = data.findIndex((bar) => {
+    const timestamp = Date.parse(bar.time.replace(" ", "T"));
+    return Number.isFinite(timestamp) && timestamp >= threshold;
+  });
+  return startIndex <= 0 ? 0 : (startIndex / data.length) * 100;
+}
+
+export type ChartLinkGroup = string | false;
+
+export function resolveChartLinkGroup(linkGroup: ChartLinkGroup | undefined): string | null {
+  if (linkGroup === false) return null;
+  return linkGroup || CHART_GROUP;
+}
+
+function escapeTooltipText(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+export function formatCandlestickTooltip(params: unknown): string {
+  if (!Array.isArray(params) || params.length === 0) return "";
+  const first = params[0] as Record<string, unknown>;
+  const lines = [escapeTooltipText(first.axisValue)];
+
+  for (const raw of params) {
+    if (!raw || typeof raw !== "object") continue;
+    const item = raw as Record<string, unknown>;
+    const seriesName = escapeTooltipText(item.seriesName);
+    if (item.seriesName === "K" && Array.isArray(item.value) && item.value.length >= 4) {
+      const [open, close, low, high] = item.value.slice(0, 4).map(Number);
+      if (![open, close, low, high].every(Number.isFinite)) continue;
+      const change = close - open;
+      const percent = open ? ((change / open) * 100).toFixed(2) : "0.00";
+      const sign = change >= 0 ? "+" : "";
+      lines.push(`O: ${open.toFixed(2)}  H: ${high.toFixed(2)}`);
+      lines.push(`L: ${low.toFixed(2)}  C: ${close.toFixed(2)} ${sign}${change.toFixed(2)} (${sign}${percent}%)`);
+    } else if (item.seriesName === "Vol") {
+      const volume = Number(item.value);
+      if (Number.isFinite(volume)) lines.push(`Vol: ${abbreviateNum(volume)}`);
+    } else if (item.value != null) {
+      const value = Number(item.value);
+      if (Number.isFinite(value)) lines.push(`${seriesName}: ${value.toFixed(2)}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+export function formatMarkerTooltip(param: unknown): string {
+  if (!param || typeof param !== "object") return "";
+  const item = param as Record<string, unknown>;
+  return escapeTooltipText(item.name ?? item.value);
+}
 
 interface Props {
   data: PriceBar[];
   markers?: TradeMarker[];
   indicators?: Record<string, IndicatorPoint[]>;
   height?: number;
+  timeframe?: string;
+  linkGroup?: ChartLinkGroup;
 }
 
-export function CandlestickChart({ data, markers, indicators, height = 500 }: Props) {
+export function CandlestickChart({ data, markers, indicators, height = 500, timeframe, linkGroup }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<ReturnType<typeof echarts.init> | null>(null);
+  const userZoomRef = useRef<{ start: number; end: number } | null>(null);
+  const intraday = isIntradayTimeframe(timeframe, data);
+  const resolvedLinkGroup = resolveChartLinkGroup(linkGroup);
   const [sub, setSub] = useState<Sub>("vol");
-  const [range, setRange] = useState<Range>("ALL");
+  const [range, setRange] = useState<ChartRangePreset>(intraday ? "5D" : "1Y");
   const [overlays, setOverlays] = useState<Set<Overlay>>(new Set(["ma5", "ma20"]));
   const [showMenu, setShowMenu] = useState(false);
   const { dark } = useDarkMode();
+  const rangeOptions = getRangeOptions(timeframe, data);
+
+  useEffect(() => {
+    userZoomRef.current = null;
+    setRange(intraday ? "5D" : "1Y");
+  }, [intraday]);
+
+  useEffect(() => {
+    userZoomRef.current = null;
+  }, [data]);
 
   const toggleOverlay = useCallback((id: Overlay) => {
     setOverlays(prev => {
@@ -88,14 +187,28 @@ export function CandlestickChart({ data, markers, indicators, height = 500 }: Pr
   useEffect(() => {
     if (!containerRef.current || data.length === 0) return;
     const chart = echarts.init(containerRef.current);
-    chart.group = CHART_GROUP;
-    connectCharts();
+    if (resolvedLinkGroup) {
+      chart.group = resolvedLinkGroup;
+      connectCharts(resolvedLinkGroup);
+    }
     chartRef.current = chart;
 
     const ro = new ResizeObserver(() => chart.resize());
     ro.observe(containerRef.current);
-    return () => { ro.disconnect(); chart.dispose(); chartRef.current = null; };
-  }, [data.length === 0, dark]); // only re-init when going empty↔non-empty or theme changes
+    const onDataZoom = () => {
+      const zoom = (chart.getOption().dataZoom as Array<{ start?: number; end?: number }> | undefined)?.[0];
+      if (typeof zoom?.start === "number" && typeof zoom?.end === "number") {
+        userZoomRef.current = { start: zoom.start, end: zoom.end };
+      }
+    };
+    chart.on("dataZoom", onDataZoom);
+    return () => {
+      chart.off("dataZoom", onDataZoom);
+      ro.disconnect();
+      chart.dispose();
+      chartRef.current = null;
+    };
+  }, [data.length === 0, dark, resolvedLinkGroup]); // only re-init when going empty↔non-empty, theme, or link group changes
 
   // Update chart options — setOption on existing instance, no dispose
   useEffect(() => {
@@ -191,35 +304,18 @@ export function CandlestickChart({ data, markers, indicators, height = 500 }: Pr
       return { name: ind.name, type: "line" as const, data: ind.values, xAxisIndex: 0, yAxisIndex: 0, symbol: "none", lineStyle: { width: 1, color: OVERLAY_COLORS[(colorIdx + i) % OVERLAY_COLORS.length], type: "dashed" as const } };
     });
 
-    const maxBars = RANGE_BARS[range];
-    const defaultStart = maxBars >= data.length ? 0 : Math.max(0, 100 - (maxBars / data.length) * 100);
+    const selectedZoom = userZoomRef.current;
+    const defaultStart = selectedZoom?.start ?? rangeStartPercent(data, range);
+    const defaultEnd = selectedZoom?.end ?? 100;
 
     chart.setOption({
       backgroundColor: "transparent",
       tooltip: {
         trigger: "axis", axisPointer: { type: "cross" },
+        renderMode: "richText",
         backgroundColor: t.tooltipBg, borderColor: t.tooltipBorder,
         textStyle: { color: t.tooltipText, fontSize: 11 },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        formatter: (params: any) => {
-          if (!Array.isArray(params) || !params.length) return "";
-          let html = `<b>${params[0].axisValue}</b>`;
-          for (const p of params) {
-            if (p.seriesName === "K" && Array.isArray(p.value)) {
-              const [open, close, low, high] = p.value;
-              const chg = close - open;
-              const pct = open ? ((chg / open) * 100).toFixed(2) : "0.00";
-              const clr = chg >= 0 ? t.upColor : t.downColor;
-              html += `<br/>O: ${open.toFixed(2)}&nbsp; H: ${high.toFixed(2)}`;
-              html += `<br/>L: ${low.toFixed(2)}&nbsp; C: <span style="color:${clr}"><b>${close.toFixed(2)}</b> ${chg >= 0 ? "+" : ""}${chg.toFixed(2)} (${chg >= 0 ? "+" : ""}${pct}%)</span>`;
-            } else if (p.seriesName === "Vol") {
-              html += `<br/>Vol: ${abbreviateNum(Number(p.value))}`;
-            } else if (p.value != null) {
-              html += `<br/>${p.marker} ${p.seriesName}: ${Number(p.value).toFixed(2)}`;
-            }
-          }
-          return html;
-        },
+        formatter: formatCandlestickTooltip,
       },
       toolbox: {
         feature: { saveAsImage: { title: "Save" }, dataZoom: { title: { zoom: "Zoom", back: "Reset" } }, restore: { title: "Reset" } },
@@ -239,14 +335,18 @@ export function CandlestickChart({ data, markers, indicators, height = 500 }: Pr
         subYAxis,
       ],
       dataZoom: [
-        { type: "inside", xAxisIndex: [0, 1], start: defaultStart, end: 100 },
+        { type: "inside", xAxisIndex: [0, 1], start: defaultStart, end: defaultEnd },
         { type: "slider", xAxisIndex: [0, 1], bottom: 4, height: 20, labelFormatter: (val: string) => val },
       ],
       series: [
         {
           name: "K", type: "candlestick", data: candle, xAxisIndex: 0, yAxisIndex: 0,
           itemStyle: { color: t.upColor, color0: t.downColor, borderColor: t.upColor, borderColor0: t.downColor },
-          markPoint: marks.length > 0 ? { data: marks, symbolSize: 28, tooltip: { formatter: (p: { name?: string; value?: string }) => p.name || p.value || "" } } : undefined,
+          markPoint: marks.length > 0 ? {
+            data: marks,
+            symbolSize: 28,
+            tooltip: { renderMode: "richText", formatter: formatMarkerTooltip },
+          } : undefined,
         },
         ...overlaySeries,
         ...extraSeries,
@@ -264,8 +364,8 @@ export function CandlestickChart({ data, markers, indicators, height = 500 }: Pr
       <div className="flex items-center gap-2 mb-1 flex-wrap">
         {/* Time range */}
         <div className="flex gap-0.5">
-          {(["1M", "3M", "6M", "1Y", "ALL"] as const).map((r) => (
-            <button key={r} onClick={() => setRange(r)} className={cn("px-1.5 py-0.5 rounded text-[10px] font-mono transition-colors", range === r ? "bg-primary/15 text-primary font-medium" : "text-muted-foreground/50 hover:text-muted-foreground")}>{r}</button>
+          {rangeOptions.map((r) => (
+            <button key={r} onClick={() => { userZoomRef.current = null; setRange(r); }} className={cn("px-1.5 py-0.5 rounded text-[10px] font-mono transition-colors", range === r ? "bg-primary/15 text-primary font-medium" : "text-muted-foreground/50 hover:text-muted-foreground")}>{r}</button>
           ))}
         </div>
 

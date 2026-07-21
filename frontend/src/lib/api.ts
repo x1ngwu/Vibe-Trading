@@ -94,6 +94,10 @@ export const api = {
   },
   getRunCode: (id: string) => request<Record<string, string>>(`/runs/${id}/code`),
   getRunPine: (id: string) => request<PineScriptResult>(`/runs/${id}/pine`),
+  getRunVisualization: (runId: string, visualizationId: string) =>
+    request<RunVisualization>(
+      `/runs/${encodeURIComponent(runId)}/visualizations/${encodeURIComponent(visualizationId)}`,
+    ),
   listSessions: () => request<SessionItem[]>("/sessions"),
   createSession: (title?: string) => request<SessionItem>("/sessions", { method: "POST", body: JSON.stringify({ title: title || "" }) }),
   deleteSession: (sid: string) => request<{ status: string }>(`/sessions/${sid}`, { method: "DELETE" }),
@@ -362,6 +366,28 @@ export interface PriceBar {
   low: number;
   close: number;
   volume: number;
+}
+
+export interface RunVisualization {
+  schema_version: 1;
+  visualization_id: string;
+  type: "candlestick_volume";
+  symbol?: string;
+  market?: string;
+  timeframe?: string;
+  source?: string;
+  adjustment?: string;
+  timezone?: string;
+  requested_start?: string;
+  requested_end?: string;
+  effective_fetch_start?: string;
+  effective_fetch_end?: string;
+  retention_policy?: string;
+  actual_start?: string;
+  actual_end?: string;
+  fetched_at?: string;
+  truncated?: boolean;
+  bars: PriceBar[];
 }
 
 export interface TradeMarker {

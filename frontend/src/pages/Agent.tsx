@@ -7,6 +7,7 @@ import { useAgentStore } from "@/stores/agent";
 import { useSSE } from "@/hooks/useSSE";
 import { ApiError, AUTH_REQUIRED_MESSAGE, api, isAuthRequiredError, type GoalSnapshot, type MandateProposal, type MandateCommitted, type LiveAction, type LiveHalted, type LiveStatus } from "@/lib/api";
 import { isReportWorthyRun } from "@/lib/runReports";
+import { parseVisualizationSpecs } from "@/lib/visualizations";
 import type { AgentMessage, ToolCallEntry } from "@/types/agent";
 import { AgentAvatar } from "@/components/chat/AgentAvatar";
 import { WelcomeScreen } from "@/components/chat/WelcomeScreen";
@@ -355,13 +356,21 @@ export function Agent() {
         const meta = m.metadata as Record<string, unknown> | undefined;
         const runId = meta?.run_id as string | undefined;
         const metrics = meta?.metrics as Record<string, number> | undefined;
+        const visualizations = parseVisualizationSpecs(meta?.visualizations);
         const ts = new Date(m.created_at).getTime();
         if (m.role === "user") {
           agentMsgs.push({ id: m.message_id, type: "user", content: m.content, timestamp: ts });
         } else if (runId) {
           // Show text answer first (if non-empty), then chart card
-          if (m.content && m.content !== "Strategy execution completed.") {
-            agentMsgs.push({ id: m.message_id + "_ans", type: "answer", content: m.content, timestamp: ts });
+          if ((m.content && m.content !== "Strategy execution completed.") || visualizations.length > 0) {
+            agentMsgs.push({
+              id: m.message_id + "_ans",
+              type: "answer",
+              content: m.content === "Strategy execution completed." ? "" : m.content,
+              runId,
+              visualizations,
+              timestamp: ts,
+            });
           }
           if (metrics && Object.keys(metrics).length > 0) {
             agentMsgs.push({ id: m.message_id, type: "run_complete", content: "", runId, metrics, timestamp: ts + 1 });
@@ -575,7 +584,17 @@ export function Agent() {
         const runDir = String(d.run_dir || "");
         const runId = runDir ? runDir.split(/[/\\]/).pop() : undefined;
         const summary = String(d.summary || "");
-        if (summary) s.addMessage({ id: "", type: "answer", content: summary, timestamp: Date.now() });
+        const visualizations = parseVisualizationSpecs(d.visualizations);
+        if (summary || visualizations.length > 0) {
+          s.addMessage({
+            id: "",
+            type: "answer",
+            content: summary,
+            runId,
+            visualizations,
+            timestamp: Date.now(),
+          });
+        }
 
         // Detect Shadow Account id if render_shadow_report fired successfully this turn
         const shadowCall = completedTools.find(

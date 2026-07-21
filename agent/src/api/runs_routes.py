@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import csv
 import json
-from datetime import datetime
+import math
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
@@ -291,6 +292,94 @@ def register_runs_routes(
             "exists": True,
             "content": pine_path.read_text(encoding="utf-8"),
         }
+
+    @app.get(
+        "/runs/{run_id}/visualizations/{visualization_id}",
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_run_visualization(run_id: str, visualization_id: str):
+        """Return one bounded, sanitized chat visualization payload."""
+        _host_validate_path_param(run_id, "run_id")
+        _host_validate_path_param(visualization_id, "visualization_id")
+        visualization_path = (
+            _host_RUNS_DIR()
+            / run_id
+            / "artifacts"
+            / "visualizations"
+            / f"{visualization_id}.json"
+        )
+        if not visualization_path.is_file():
+            raise HTTPException(status_code=404, detail="visualization not found")
+        try:
+            if visualization_path.stat().st_size > 5_000_000:
+                raise HTTPException(status_code=413, detail="visualization payload is too large")
+            payload = json.loads(visualization_path.read_text(encoding="utf-8"))
+        except HTTPException:
+            raise
+        except (OSError, json.JSONDecodeError):
+            raise HTTPException(status_code=422, detail="invalid visualization payload")
+
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema_version") != 1
+            or payload.get("type") != "candlestick_volume"
+            or payload.get("visualization_id") != visualization_id
+            or not isinstance(payload.get("bars"), list)
+            or len(payload["bars"]) > 5000
+        ):
+            raise HTTPException(status_code=422, detail="invalid visualization payload")
+
+        bars: list[dict[str, Any]] = []
+        previous_time: float | None = None
+        for raw_bar in payload["bars"]:
+            if not isinstance(raw_bar, dict) or not isinstance(raw_bar.get("time"), str):
+                raise HTTPException(status_code=422, detail="invalid visualization bar")
+            raw_time = raw_bar["time"]
+            if not raw_time or len(raw_time) > 64 or raw_time != raw_time.strip() or " " in raw_time:
+                raise HTTPException(status_code=422, detail="invalid visualization bar time")
+            try:
+                parsed_time = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+            except ValueError:
+                raise HTTPException(status_code=422, detail="invalid visualization bar time")
+            if parsed_time.tzinfo is None:
+                parsed_time = parsed_time.replace(tzinfo=timezone.utc)
+            time_key = parsed_time.timestamp()
+            if previous_time is not None and time_key <= previous_time:
+                raise HTTPException(status_code=422, detail="visualization bars must be strictly ascending")
+            previous_time = time_key
+
+            bar: dict[str, Any] = {"time": raw_time}
+            for field in ("open", "high", "low", "close", "volume"):
+                value = raw_bar.get(field)
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                    raise HTTPException(status_code=422, detail="invalid visualization bar")
+                bar[field] = value
+            if (
+                min(bar["open"], bar["high"], bar["low"], bar["close"]) <= 0
+                or bar["volume"] < 0
+                or bar["high"] < max(bar["open"], bar["close"], bar["low"])
+                or bar["low"] > min(bar["open"], bar["close"], bar["high"])
+            ):
+                raise HTTPException(status_code=422, detail="invalid visualization OHLCV semantics")
+            bars.append(bar)
+
+        response = {
+            "schema_version": 1,
+            "visualization_id": visualization_id,
+            "type": "candlestick_volume",
+            "bars": bars,
+        }
+        if isinstance(payload.get("truncated"), bool):
+            response["truncated"] = payload["truncated"]
+        for field in (
+            "symbol", "market", "timeframe", "source", "adjustment", "timezone",
+            "requested_start", "requested_end", "effective_fetch_start", "effective_fetch_end",
+            "retention_policy", "actual_start", "actual_end", "fetched_at",
+        ):
+            value = payload.get(field)
+            if isinstance(value, str):
+                response[field] = value[:500]
+        return JSONResponse(response)
 
     @app.get("/runs/{run_id}", response_model=RunResponse, dependencies=[Depends(require_auth)])
     async def get_run_result(

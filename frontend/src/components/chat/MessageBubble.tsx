@@ -8,6 +8,7 @@ import { formatTimestamp } from "@/lib/formatters";
 import type { AgentMessage } from "@/types/agent";
 import { AgentAvatar } from "./AgentAvatar";
 import { RunCompleteCard } from "./RunCompleteCard";
+import { VisualizationRenderer } from "@/components/visualizations/VisualizationRenderer";
 
 const remarkPlugins = [remarkGfm];
 const rehypePlugins = [rehypeHighlight];
@@ -73,6 +74,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onRetry }: Props
           <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed prose-table:border prose-table:border-border/50 prose-th:bg-muted/30 prose-th:px-3 prose-th:py-1.5 prose-td:px-3 prose-td:py-1.5 prose-th:text-left prose-th:text-xs prose-th:font-medium prose-td:text-xs prose-hr:hidden">
             <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>{msg.content}</ReactMarkdown>
           </div>
+          <VisualizationRenderer runId={msg.runId} visualizations={msg.visualizations} />
           {ts && <span className="text-[9px] text-muted-foreground/30 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">{ts}</span>}
         </div>
       </div>
