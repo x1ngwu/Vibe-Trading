@@ -6,12 +6,13 @@
 
 ## Status
 
-- Overall: **All required P0/P1 repair items complete; 6/7 live smoke paths pass, with the index path blocked by Yahoo HTTP 429**
+- Overall: **Closed — all required P0/P1 repair items complete; 6/7 live smoke paths pass, with the index path externally blocked by Yahoo HTTP 429**
 - Priority order: **P0 blockers first, then P1 correctness/performance**
 - Opened: 2026-07-21
+- Closed: 2026-07-22
 - Baseline commit: `d5f8297`
-- Repair batch: implementation, tests, and documentation are tracked; 14 local `.orig` patch
-  backups remain untracked and are excluded from commits
+- Repair batch: implementation, tests, validation, cleanup, and documentation are complete;
+  no local patch backups remain
 - Last updated: 2026-07-22
 
 ## Midday pause handoff — 2026-07-22
@@ -41,6 +42,19 @@ Resume order:
 Non-blocking deferred work remains limited to the accessibility, localization, calendar wording,
 and bundle-size items listed later in this document. None should be folded into the index-smoke
 retry without an explicit scope decision.
+
+### Post-pause closure update
+
+- Retried only the `^GSPC` live daily-chart path. Yahoo's direct chart endpoint still returned
+  HTTP 429, yfinance reported the same rate limit, and the remaining compatible unauthenticated
+  fallbacks returned no usable index data. The external validation gap therefore remains open
+  without a local code change.
+- Per the handoff rule, the backend and frontend full suites were not repeated because the retry
+  exposed no reproducible local defect and no implementation file changed.
+- The user approved deletion of the 14 untracked `.orig` patch backups after inventory and Git
+  recoverability review. They were removed, leaving the source worktree clean.
+- This tracker is closed. Deferred accessibility, localization, calendar wording, and bundle-size
+  work requires a new explicitly scoped tracker before implementation begins.
 
 ### Status legend
 
@@ -534,6 +548,11 @@ Each batch must be reviewable and reversible without depending on unfinished lat
   Sina (35 bars) and AAPL 5-minute through Eastmoney (312 bars), preserving structured source
   attempts. The `^GSPC` index path remained unresolved after all compatible unauthenticated
   fallbacks, so its live smoke is recorded as an external provider-cooldown blocker.
+- Retried only the `^GSPC` daily live smoke after the midday pause. Yahoo's direct endpoint and
+  yfinance remained rate-limited with HTTP 429, and every compatible unauthenticated fallback
+  returned no usable index bars. No local defect was observed, so no code or test rerun was needed.
+- Removed all 14 user-approved untracked `.orig` patch backups (132,812 bytes total) and closed
+  this repair tracker.
 
 ## Completion record
 
@@ -545,7 +564,7 @@ retained explicitly rather than being treated as an implementation failure.
 - Tests executed: backend 5,300 passed / 9 skipped; frontend 32 files / 266 tests passed;
   TypeScript/Vite production build passed; six live provider paths passed
 - Known residual risks: `^GSPC` live validation requires a Yahoo rate-limit cooldown or an
-  authenticated index-capable provider; 14 pre-existing `.orig` backups remain untracked and
-  excluded; deferred accessibility and chunk-size items remain listed above
+  authenticated index-capable provider; deferred accessibility, localization, calendar wording,
+  and bundle-size items require separate scoping
 - Reviewer decision: required chart repair is implementation-complete; retry the index smoke after
   provider cooldown before treating the entire live-provider matrix as green
