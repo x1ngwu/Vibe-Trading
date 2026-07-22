@@ -1,6 +1,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api } from "@/lib/api";
+import { getChartTheme } from "@/lib/chart-theme";
 import { VisualizationRenderer } from "../VisualizationRenderer";
 
 vi.mock("@/components/charts/CandlestickChart", () => ({
@@ -52,6 +53,7 @@ describe("VisualizationRenderer", () => {
   });
 
   afterEach(() => {
+    document.documentElement.lang = "en";
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -92,6 +94,26 @@ describe("VisualizationRenderer", () => {
     />);
 
     expect(await screen.findByTestId("candlestick-chart")).toHaveAttribute("data-initial-range", "5D");
+  });
+
+  it("uses the locale-aware chart theme for the header change color", async () => {
+    document.documentElement.lang = "zh-CN";
+    vi.spyOn(api, "getRunVisualization").mockResolvedValue({
+      schema_version: 1,
+      visualization_id: "kline_colors",
+      type: "candlestick_volume",
+      bars: [
+        { time: "2026-07-20", open: 9, high: 11, low: 8, close: 10, volume: 100 },
+        { time: "2026-07-21", open: 10, high: 12, low: 9, close: 11, volume: 200 },
+      ],
+    });
+
+    render(<VisualizationRenderer
+      runId="run-colors"
+      visualizations={[{ ...spec, visualization_id: "kline_colors", data_ref: "kline_colors" }]}
+    />);
+
+    expect(await screen.findByText("+10.00%")).toHaveStyle({ color: getChartTheme().upColor });
   });
   it("isolates two simultaneous chat visualizations from global chart linking", async () => {
     vi.spyOn(api, "getRunVisualization").mockResolvedValue({

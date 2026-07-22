@@ -3,6 +3,7 @@ import { Maximize2, RefreshCw, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { CandlestickChart, isIntradayTimeframe } from "@/components/charts/CandlestickChart";
 import { api, type RunVisualization } from "@/lib/api";
+import { getChartTheme } from "@/lib/chart-theme";
 import { abbreviateNum } from "@/lib/formatters";
 import { cn } from "@/lib/utils";
 import type { VisualizationSpec } from "@/types/agent";
@@ -195,6 +196,7 @@ function ChartPanel({ runId, spec }: ChartPanelProps) {
           const changePct = previous?.close
             ? ((latest.close - previous.close) / previous.close) * 100
             : undefined;
+          const chartTheme = getChartTheme();
           return (
             <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[10px] font-mono text-muted-foreground">
               <span>O {formatPrice(latest.open)}</span>
@@ -202,7 +204,7 @@ function ChartPanel({ runId, spec }: ChartPanelProps) {
               <span>L {formatPrice(latest.low)}</span>
               <span className="font-semibold text-foreground">C {formatPrice(latest.close)}</span>
               {changePct != null && (
-                <span className={changePct >= 0 ? "text-rose-500" : "text-emerald-500"}>
+                <span style={{ color: changePct >= 0 ? chartTheme.upColor : chartTheme.downColor }}>
                   {changePct >= 0 ? "+" : ""}{changePct.toFixed(2)}%
                 </span>
               )}

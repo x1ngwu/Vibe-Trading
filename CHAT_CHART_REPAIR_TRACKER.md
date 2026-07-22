@@ -6,7 +6,7 @@
 
 ## Status
 
-- Overall: **P0, backend P1-01 through P1-04, and frontend P1-05/P1-06 complete; P1-07 remains**
+- Overall: **All required P0/P1 repair items complete; final real-data smoke tests and review remain**
 - Priority order: **P0 blockers first, then P1 correctness/performance**
 - Opened: 2026-07-21
 - Baseline commit: `d5f8297`
@@ -367,17 +367,26 @@ Acceptance:
 
 ### P1-07 Use locale-aware gain/loss colors
 
-Status: `[ ]`
+Status: `[x]` — implemented and full frontend verification passed
 
 Planned repair:
 
 - Reuse the existing chart theme rather than hardcoding red-up/green-down classes.
 
+Implementation evidence:
+
+- The chat chart header now uses the same locale-aware `upColor` and `downColor` values as the
+  ECharts candlesticks, trade markers, MACD bars, and volume series.
+- Regression tests verify that Chinese swaps the international green-up/red-down convention to
+  red-up/green-down, including the matching translucent volume colors.
+- Component tests verify the header, candle body/border, and per-bar volume colors resolve from
+  the same locale theme.
+
 Acceptance:
 
-- [ ] Chinese UI uses red-up/green-down consistently.
-- [ ] Other locales use green-up/red-down consistently.
-- [ ] Header change color, candles, and volume colors agree.
+- [x] Chinese UI uses red-up/green-down consistently.
+- [x] Other locales use green-up/red-down consistently.
+- [x] Header change color, candles, and volume colors agree.
 
 ## Deferred low-priority work
 
@@ -482,6 +491,10 @@ Each batch must be reviewable and reversible without depending on unfinished lat
 - Completed P1-06 by restoring the reusable K-line default to `ALL`, adding a validated explicit
   initial-range prop, and limiting the daily `1Y` / intraday `5D` defaults to chat charts.
 - P1-06 focused frontend verification passed 3 files/14 tests; full Vitest passed 31 files/263
+  tests, and the production TypeScript/Vite build passed.
+- Completed P1-07 by replacing the chat header's hardcoded red/green classes with the shared
+  locale-aware chart theme used by candlesticks and volume.
+- P1-07 focused frontend verification passed 3 files/12 tests; full Vitest passed 32 files/266
   tests, and the production TypeScript/Vite build passed.
 
 ## Completion record
