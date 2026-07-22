@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from backtest.loaders.registry import FALLBACK_CHAINS
 from src.agent.tools import BaseTool
 from src.market_data import YAHOO_INDEX_SYMBOLS, detect_source, fetch_market_data, get_loader
 from src.tools.path_utils import safe_path, safe_run_dir
@@ -19,6 +20,51 @@ _MAX_BARS = 5000
 _MANIFEST_NAME = "visualizations.json"
 _SUPPORTED_INTERVALS = ("1m", "5m", "15m", "30m", "1H", "1D")
 _INTRADAY_INTERVALS = frozenset({"1m", "5m", "15m", "30m", "1H"})
+_ALL_SUPPORTED_INTERVALS = frozenset(_SUPPORTED_INTERVALS)
+_DAILY_ONLY = frozenset({"1D"})
+# Verified chart capabilities. Providers omitted from a market, and local files
+# whose native granularity cannot be proven before loading, are not eligible for
+# automatic chart fallback. This prevents a daily-only loader from silently
+# returning daily bars for a minute request and having them relabelled.
+MARKET_INTERVAL_PROVIDER_CAPABILITIES: dict[str, dict[str, frozenset[str]]] = {
+    "a_share": {
+        "tencent": _DAILY_ONLY,
+        "mootdx": _ALL_SUPPORTED_INTERVALS,
+        "eastmoney": _ALL_SUPPORTED_INTERVALS,
+        "baostock": _DAILY_ONLY,
+        "akshare": _DAILY_ONLY,
+        "tushare": _ALL_SUPPORTED_INTERVALS,
+    },
+    "us_equity": {
+        "yahoo": _ALL_SUPPORTED_INTERVALS,
+        "stooq": _DAILY_ONLY,
+        "sina": _DAILY_ONLY,
+        "eastmoney": _ALL_SUPPORTED_INTERVALS,
+        "yfinance": _ALL_SUPPORTED_INTERVALS,
+        "tiingo": _DAILY_ONLY,
+        "fmp": _DAILY_ONLY,
+        "finnhub": _DAILY_ONLY,
+        "alphavantage": _DAILY_ONLY,
+        "akshare": _DAILY_ONLY,
+    },
+    "hk_equity": {
+        "eastmoney": _ALL_SUPPORTED_INTERVALS,
+        "yahoo": _ALL_SUPPORTED_INTERVALS,
+        "futu": frozenset({"1H", "1D"}),
+        "yfinance": _ALL_SUPPORTED_INTERVALS,
+        "akshare": _DAILY_ONLY,
+    },
+    "india_equity": {
+        "yahoo": _ALL_SUPPORTED_INTERVALS,
+        "yfinance": _ALL_SUPPORTED_INTERVALS,
+        "india_broker": _ALL_SUPPORTED_INTERVALS,
+    },
+    "crypto": {
+        "okx": _ALL_SUPPORTED_INTERVALS,
+        "ccxt": _ALL_SUPPORTED_INTERVALS,
+        "yfinance": _ALL_SUPPORTED_INTERVALS,
+    },
+}
 _RETENTION_POLICY = "latest_contiguous_up_to_5000_bars"
 _INTERVAL_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1H": 60}
 _SESSION_MINUTES = {
@@ -71,6 +117,37 @@ def _market_for(symbol: str) -> str:
     if symbol.endswith("-USDT") or "/USDT" in symbol:
         return "Crypto"
     return "Unknown"
+
+
+def _market_key_for(symbol: str) -> str | None:
+    if symbol in YAHOO_INDEX_SYMBOLS or symbol.endswith(".US"):
+        return "us_equity"
+    if symbol.endswith((".SH", ".SZ", ".BJ")):
+        return "a_share"
+    if symbol.endswith(".HK"):
+        return "hk_equity"
+    if symbol.endswith((".NS", ".BO")):
+        return "india_equity"
+    if symbol.endswith("-USDT") or "/USDT" in symbol:
+        return "crypto"
+    return None
+
+
+def _provider_supports_interval(symbol: str, source: str, interval: str) -> bool:
+    market = _market_key_for(symbol)
+    if market is None:
+        return False
+    return interval in MARKET_INTERVAL_PROVIDER_CAPABILITIES.get(market, {}).get(
+        source, frozenset()
+    )
+
+
+def _candidate_sources(symbol: str, preferred_source: str, *, allow_fallback: bool) -> list[str]:
+    if not allow_fallback:
+        return [preferred_source]
+    market = _market_key_for(symbol)
+    chain = FALLBACK_CHAINS.get(market or "", [])
+    return list(dict.fromkeys([preferred_source, *chain]))
 
 
 def _adjustment_for(source: str) -> str:
@@ -388,49 +465,88 @@ class PriceChartTool(BaseTool):
         output_dir.mkdir(parents=True, exist_ok=True)
 
         requested_source = str(kwargs.get("source") or "auto").strip().lower()
-        resolved_sources: dict[str, str] = {}
-
-        def resolve_loader(source: str) -> type:
-            loader_cls = get_loader(source)
-            try:
-                resolved_sources[source] = str(getattr(loader_cls(), "name", source))
-            except Exception:
-                resolved_sources[source] = source
-            return loader_cls
-
-        groups: dict[tuple[str, str], list[str]] = {}
-        source_by_symbol: dict[str, str] = {}
-        fetch_start_by_symbol: dict[str, str] = {}
-        for symbol in codes:
-            source = (
-                requested_source
-                if requested_source != "auto"
-                else _preferred_source(symbol, interval, start_date, end_date)
-            )
-            fetch_start = _effective_fetch_start(
-                symbol, source, interval, start_date, end_date
-            )
-            groups.setdefault((source, fetch_start), []).append(symbol)
-            source_by_symbol[symbol] = source
-            fetch_start_by_symbol[symbol] = fetch_start
-
+        allow_fallback = requested_source == "auto"
         data: dict[str, Any] = {}
         unresolved: set[str] = set()
-        for (source, fetch_start), source_codes in groups.items():
-            source_data = fetch_market_data(
-                codes=source_codes,
-                start_date=fetch_start,
-                end_date=end_date,
-                source=source,
-                interval=interval,
-                max_rows=0,
-                loader_resolver=resolve_loader,
+        source_by_symbol: dict[str, str] = {}
+        fetch_start_by_symbol: dict[str, str] = {}
+        source_attempts: dict[str, list[dict[str, str]]] = {
+            symbol: [] for symbol in codes
+        }
+
+        for symbol in codes:
+            preferred_source = (
+                requested_source
+                if not allow_fallback
+                else _preferred_source(symbol, interval, start_date, end_date)
             )
-            if isinstance(source_data, dict):
-                unresolved.update(source_data.get("_unresolved", []))
-                data.update({key: value for key, value in source_data.items() if key != "_unresolved"})
+            candidates = _candidate_sources(
+                symbol, preferred_source, allow_fallback=allow_fallback
+            )
+            tried_actual_sources: set[str] = set()
+
+            for candidate in candidates:
+                if not _provider_supports_interval(symbol, candidate, interval):
+                    source_attempts[symbol].append(
+                        {"source": candidate, "status": "unsupported_interval"}
+                    )
+                    continue
+
+                try:
+                    loader_cls = get_loader(candidate)
+                    actual_source = str(getattr(loader_cls(), "name", candidate))
+                except Exception:
+                    source_attempts[symbol].append(
+                        {"source": candidate, "status": "unavailable"}
+                    )
+                    continue
+
+                if actual_source in tried_actual_sources:
+                    continue
+                tried_actual_sources.add(actual_source)
+
+                attempt: dict[str, str] = {"source": actual_source, "status": "no_data"}
+                if actual_source != candidate:
+                    attempt["resolved_from"] = candidate
+                if not _provider_supports_interval(symbol, actual_source, interval):
+                    attempt["status"] = "unsupported_interval"
+                    source_attempts[symbol].append(attempt)
+                    continue
+
+                fetch_start = _effective_fetch_start(
+                    symbol, actual_source, interval, start_date, end_date
+                )
+                try:
+                    source_data = fetch_market_data(
+                        codes=[symbol],
+                        start_date=fetch_start,
+                        end_date=end_date,
+                        source=actual_source,
+                        interval=interval,
+                        max_rows=0,
+                        loader_resolver=lambda _source, cls=loader_cls: cls,
+                    )
+                except Exception:
+                    attempt["status"] = "unavailable"
+                    source_attempts[symbol].append(attempt)
+                    continue
+
+                candidate_rows = (
+                    source_data.get(symbol) if isinstance(source_data, dict) else None
+                )
+                normalized_bars, _, _ = _normalize_bars(candidate_rows, interval)
+                if not normalized_bars:
+                    source_attempts[symbol].append(attempt)
+                    continue
+
+                attempt["status"] = "success"
+                source_attempts[symbol].append(attempt)
+                data[symbol] = candidate_rows
+                source_by_symbol[symbol] = actual_source
+                fetch_start_by_symbol[symbol] = fetch_start
+                break
             else:
-                unresolved.update(source_codes)
+                unresolved.add(symbol)
 
         manifest_path = safe_path(f"artifacts/{_MANIFEST_NAME}", run_dir)
         manifest: list[dict[str, Any]] = []
@@ -448,8 +564,7 @@ class PriceChartTool(BaseTool):
                 unresolved.add(symbol)
                 continue
 
-            preferred_source = source_by_symbol[symbol]
-            actual_source = resolved_sources.get(preferred_source, preferred_source)
+            actual_source = source_by_symbol[symbol]
             effective_fetch_start = fetch_start_by_symbol[symbol]
             range_truncated = effective_fetch_start > start_date
             truncated = row_truncated or range_truncated
@@ -511,6 +626,7 @@ class PriceChartTool(BaseTool):
                 "status": "ok" if created else "error",
                 "visualizations": created,
                 "unresolved": sorted(unresolved),
+                "source_attempts": source_attempts,
                 "message": "Interactive K-line chart attached to the chat response." if created else "No market data was available for the requested symbols.",
             },
             ensure_ascii=False,

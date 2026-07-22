@@ -6,7 +6,7 @@
 
 ## Status
 
-- Overall: **P0 implementation and focused verification complete; P1-02 end-to-end verification remains open; P1-03/P1-04 focused verification complete**
+- Overall: **P0 complete; P1-01/P1-03/P1-04 complete; P1-02 end-to-end verification remains open; frontend P1 work remains**
 - Priority order: **P0 blockers first, then P1 correctness/performance**
 - Opened: 2026-07-21
 - Baseline commit: `d5f8297`
@@ -211,7 +211,7 @@ Acceptance:
 
 ### P1-01 Implement real capability-aware provider fallback
 
-Status: `[ ]`
+Status: `[x]` — implemented and verified
 
 Planned repair:
 
@@ -220,11 +220,23 @@ Planned repair:
 - Track the actual provider per symbol.
 - Never silently fall back to an incompatible interval or adjustment mode.
 
+Implementation evidence:
+
+- Added a verified market × provider × interval capability matrix for A-share, US, HK,
+  India, and crypto chart sources.
+- Automatic requests try providers per symbol in fallback order; failed or empty providers
+  fall through only to sources that support the exact requested interval.
+- Daily-only providers are skipped for intraday requests and reported as
+  `unsupported_interval`; provider resolution/fetch failures and empty results are reported as
+  `unavailable` or `no_data`.
+- The successful provider is persisted as the chart source, and `source_attempts` exposes the
+  complete per-symbol diagnostic path without changing successful partial-result behavior.
+
 Acceptance:
 
-- [ ] A failed primary provider falls through to a compatible secondary provider.
-- [ ] An incompatible fallback is skipped and reported.
-- [ ] Partial multi-symbol success returns the successful charts plus explicit unresolved symbols.
+- [x] A failed primary provider falls through to a compatible secondary provider.
+- [x] An incompatible fallback is skipped and reported.
+- [x] Partial multi-symbol success returns the successful charts plus explicit unresolved symbols.
 
 ### P1-02 Restrict writes to the current attempt run
 
@@ -365,7 +377,7 @@ same component makes them effectively free to include.
 - [x] Visualization API validation/security tests.
 - [x] SessionService persistence and historical replay tests.
 - [x] AgentLoop current-run injection test.
-- [ ] Provider fallback and interval capability tests.
+- [x] Provider fallback and interval capability tests.
 - [x] Runtime registry smoke test.
 - [ ] Real-data smoke tests for A-share daily/minute, US daily/minute, index, and crypto.
 
@@ -437,6 +449,10 @@ Each batch must be reviewable and reversible without depending on unfinished lat
 - Focused chart/API/loop/market-data/Yahoo verification passed: 119 tests.
 - The final broad non-live backend run passed 5,297 tests and skipped 9 live/environment-gated
   tests. Frontend Vitest passed 30 files/255 tests, and the production build passed.
+- Completed P1-01 capability-aware provider fallback with exact-interval filtering, per-symbol
+  retry, actual-source persistence, and structured source-attempt diagnostics.
+- P1-01 focused chart/API/loop/market-data/Yahoo verification passed 122 tests; the updated broad
+  non-live backend suite passed 5,300 tests and skipped 9 live/environment-gated tests.
 
 ## Completion record
 

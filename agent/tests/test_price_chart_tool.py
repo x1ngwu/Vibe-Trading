@@ -22,6 +22,14 @@ class _YahooLoader:
     name = "yahoo"
 
 
+class _YfinanceLoader:
+    name = "yfinance"
+
+
+class _IndiaBrokerLoader:
+    name = "india_broker"
+
+
 def test_system_prompt_routes_chart_requests_to_price_chart_tool() -> None:
     from src.agent.context import _SYSTEM_PROMPT
 
@@ -268,6 +276,144 @@ def test_price_chart_tool_reports_effective_fetch_range_for_long_intraday_reques
     assert spec["effective_fetch_end"] == "2026-07-21"
     assert spec["retention_policy"] == "latest_contiguous_up_to_5000_bars"
     assert spec["truncated"] is True
+
+
+def test_price_chart_falls_back_to_compatible_secondary_provider(monkeypatch, tmp_path) -> None:
+    fetch_calls: list[str] = []
+    loaders = {
+        "yahoo": _YahooLoader,
+        "yfinance": _YfinanceLoader,
+        "india_broker": _IndiaBrokerLoader,
+    }
+
+    def fake_fetch(**kwargs):
+        source = kwargs["source"]
+        fetch_calls.append(source)
+        if source == "yahoo":
+            return {"_unresolved": ["RELIANCE.NS"]}
+        if source == "yfinance":
+            return {
+                "RELIANCE.NS": [
+                    {
+                        "trade_date": "2026-07-21 09:15:00",
+                        "open": 10,
+                        "high": 12,
+                        "low": 9,
+                        "close": 11,
+                        "volume": 100,
+                    }
+                ]
+            }
+        return {"_unresolved": ["RELIANCE.NS"]}
+
+    monkeypatch.setattr(price_chart_tool, "safe_run_dir", lambda _value: tmp_path)
+    monkeypatch.setattr(price_chart_tool, "get_loader", lambda source: loaders[source])
+    monkeypatch.setattr(price_chart_tool, "fetch_market_data", fake_fetch)
+
+    result = json.loads(price_chart_tool.PriceChartTool().execute(
+        codes=["RELIANCE.NS"],
+        interval="5m",
+        start_date="2026-07-21",
+        end_date="2026-07-21",
+        run_dir="ignored-in-test",
+    ))
+
+    assert fetch_calls == ["yahoo", "yfinance"]
+    assert result["visualizations"][0]["source"] == "yfinance"
+    assert result["source_attempts"]["RELIANCE.NS"] == [
+        {"source": "yahoo", "status": "no_data"},
+        {"source": "yfinance", "status": "success"},
+    ]
+
+
+def test_price_chart_skips_incompatible_intraday_fallbacks(monkeypatch, tmp_path) -> None:
+    fetch_calls: list[str] = []
+    loaders = {
+        "yahoo": _YahooLoader,
+        "eastmoney": _EastmoneyLoader,
+    }
+
+    def fake_fetch(**kwargs):
+        source = kwargs["source"]
+        fetch_calls.append(source)
+        if source == "eastmoney":
+            return {
+                "AAPL.US": [
+                    {
+                        "trade_date": "2026-07-21 09:35:00",
+                        "open": 10,
+                        "high": 12,
+                        "low": 9,
+                        "close": 11,
+                        "volume": 100,
+                    }
+                ]
+            }
+        return {"_unresolved": ["AAPL.US"]}
+
+    monkeypatch.setattr(price_chart_tool, "safe_run_dir", lambda _value: tmp_path)
+    monkeypatch.setattr(price_chart_tool, "get_loader", lambda source: loaders[source])
+    monkeypatch.setattr(price_chart_tool, "fetch_market_data", fake_fetch)
+
+    result = json.loads(price_chart_tool.PriceChartTool().execute(
+        codes=["AAPL.US"],
+        interval="1m",
+        start_date="2026-07-21",
+        end_date="2026-07-21",
+        run_dir="ignored-in-test",
+    ))
+
+    assert fetch_calls == ["yahoo", "eastmoney"]
+    assert {attempt["source"]: attempt["status"] for attempt in result["source_attempts"]["AAPL.US"]} == {
+        "yahoo": "no_data",
+        "stooq": "unsupported_interval",
+        "sina": "unsupported_interval",
+        "eastmoney": "success",
+    }
+
+
+def test_price_chart_partial_success_reports_unresolved_symbol_attempts(monkeypatch, tmp_path) -> None:
+    def fake_fetch(**kwargs):
+        symbol = kwargs["codes"][0]
+        if symbol == "AAPL.US" and kwargs["source"] == "yahoo":
+            return {
+                symbol: [
+                    {
+                        "trade_date": "2026-07-21",
+                        "open": 10,
+                        "high": 12,
+                        "low": 9,
+                        "close": 11,
+                        "volume": 100,
+                    }
+                ]
+            }
+        return {"_unresolved": [symbol]}
+
+    monkeypatch.setattr(price_chart_tool, "safe_run_dir", lambda _value: tmp_path)
+    monkeypatch.setattr(
+        price_chart_tool,
+        "get_loader",
+        lambda source: type(f"_{source.title()}Loader", (), {"name": source}),
+    )
+    monkeypatch.setattr(price_chart_tool, "fetch_market_data", fake_fetch)
+
+    result = json.loads(price_chart_tool.PriceChartTool().execute(
+        codes=["AAPL.US", "MSFT.US"],
+        start_date="2026-07-01",
+        end_date="2026-07-21",
+        run_dir="ignored-in-test",
+    ))
+
+    assert result["status"] == "ok"
+    assert [item["symbol"] for item in result["visualizations"]] == ["AAPL.US"]
+    assert result["unresolved"] == ["MSFT.US"]
+    assert result["source_attempts"]["AAPL.US"][-1]["status"] == "success"
+    assert result["source_attempts"]["MSFT.US"]
+    assert all(
+        attempt["status"] in {"no_data", "unavailable", "unsupported_interval"}
+        for attempt in result["source_attempts"]["MSFT.US"]
+    )
 
 
 def test_price_chart_tool_keeps_latest_bars_contiguous_when_bounded(monkeypatch, tmp_path) -> None:
