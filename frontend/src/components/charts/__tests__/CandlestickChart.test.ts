@@ -6,6 +6,7 @@ import {
   getRangeOptions,
   isIntradayTimeframe,
   rangeStartPercent,
+  resolveInitialRange,
   resolveChartLinkGroup,
 } from "../CandlestickChart";
 
@@ -30,6 +31,14 @@ describe("CandlestickChart range helpers", () => {
     expect(isIntradayTimeframe("5m", minuteData)).toBe(true);
     expect(getRangeOptions("5m", minuteData)).toEqual(["1D", "5D", "1M", "3M", "ALL"]);
     expect(getRangeOptions("1D")).toEqual(["1M", "3M", "6M", "1Y", "3Y", "5Y", "ALL"]);
+  });
+
+  it("defaults reusable charts to ALL and accepts valid explicit initial ranges", () => {
+    expect(resolveInitialRange(undefined, "1D")).toBe("ALL");
+    expect(resolveInitialRange(undefined, "5m")).toBe("ALL");
+    expect(resolveInitialRange("1Y", "1D")).toBe("1Y");
+    expect(resolveInitialRange("5D", "5m")).toBe("5D");
+    expect(resolveInitialRange("5D", "1D")).toBe("ALL");
   });
 
   it("renders tooltip data as escaped rich text without HTML fragments", () => {

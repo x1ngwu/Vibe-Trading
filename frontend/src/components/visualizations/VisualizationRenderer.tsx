@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Maximize2, RefreshCw, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { CandlestickChart } from "@/components/charts/CandlestickChart";
+import { CandlestickChart, isIntradayTimeframe } from "@/components/charts/CandlestickChart";
 import { api, type RunVisualization } from "@/lib/api";
 import { abbreviateNum } from "@/lib/formatters";
 import { cn } from "@/lib/utils";
@@ -258,13 +258,15 @@ function ChartPanel({ runId, spec }: ChartPanelProps) {
         </div>
       );
     }
+    const chartTimeframe = data.timeframe || spec.timeframe;
     return (
       <div className="px-2 pt-2">
         <CandlestickChart
           data={data.bars}
           height={height}
-          timeframe={data.timeframe || spec.timeframe}
+          timeframe={chartTimeframe}
           linkGroup={false}
+          initialRange={isIntradayTimeframe(chartTimeframe, data.bars) ? "5D" : "1Y"}
         />
       </div>
     );

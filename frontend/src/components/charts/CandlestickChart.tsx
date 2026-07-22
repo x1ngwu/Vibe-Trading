@@ -46,6 +46,15 @@ export function getRangeOptions(timeframe: string | undefined, data: PriceBar[] 
   return isIntradayTimeframe(timeframe, data) ? INTRADAY_RANGE_OPTIONS : DAILY_RANGE_OPTIONS;
 }
 
+export function resolveInitialRange(
+  initialRange: ChartRangePreset | undefined,
+  timeframe: string | undefined,
+  data: PriceBar[] = [],
+): ChartRangePreset {
+  if (initialRange && getRangeOptions(timeframe, data).includes(initialRange)) return initialRange;
+  return "ALL";
+}
+
 export function rangeStartPercent(data: PriceBar[], range: ChartRangePreset): number {
   if (range === "ALL" || data.length < 2) return 0;
   const days = RANGE_DAYS[range];
@@ -117,16 +126,17 @@ interface Props {
   height?: number;
   timeframe?: string;
   linkGroup?: ChartLinkGroup;
+  initialRange?: ChartRangePreset;
 }
 
-export function CandlestickChart({ data, markers, indicators, height = 500, timeframe, linkGroup }: Props) {
+export function CandlestickChart({ data, markers, indicators, height = 500, timeframe, linkGroup, initialRange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<ReturnType<typeof echarts.init> | null>(null);
   const userZoomRef = useRef<{ start: number; end: number } | null>(null);
-  const intraday = isIntradayTimeframe(timeframe, data);
+  const resolvedInitialRange = resolveInitialRange(initialRange, timeframe, data);
   const resolvedLinkGroup = resolveChartLinkGroup(linkGroup);
   const [sub, setSub] = useState<Sub>("vol");
-  const [range, setRange] = useState<ChartRangePreset>(intraday ? "5D" : "1Y");
+  const [range, setRange] = useState<ChartRangePreset>(resolvedInitialRange);
   const [overlays, setOverlays] = useState<Set<Overlay>>(new Set(["ma5", "ma20"]));
   const [showMenu, setShowMenu] = useState(false);
   const { dark } = useDarkMode();
@@ -134,8 +144,8 @@ export function CandlestickChart({ data, markers, indicators, height = 500, time
 
   useEffect(() => {
     userZoomRef.current = null;
-    setRange(intraday ? "5D" : "1Y");
-  }, [intraday]);
+    setRange(resolvedInitialRange);
+  }, [resolvedInitialRange]);
 
   useEffect(() => {
     userZoomRef.current = null;

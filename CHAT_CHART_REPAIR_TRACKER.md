@@ -6,7 +6,7 @@
 
 ## Status
 
-- Overall: **P0, backend P1-01 through P1-04, and frontend P1-05 complete; P1-06/P1-07 remain**
+- Overall: **P0, backend P1-01 through P1-04, and frontend P1-05/P1-06 complete; P1-07 remains**
 - Priority order: **P0 blockers first, then P1 correctness/performance**
 - Opened: 2026-07-21
 - Baseline commit: `d5f8297`
@@ -343,7 +343,7 @@ Acceptance:
 
 ### P1-06 Preserve existing Run Detail defaults
 
-Status: `[ ]`
+Status: `[x]` — implemented and full frontend verification passed
 
 Planned repair:
 
@@ -351,11 +351,19 @@ Planned repair:
 - Add an explicit initial-range prop.
 - Use `1Y` daily and `5D` intraday defaults only for chat visualizations.
 
+Implementation evidence:
+
+- The reusable chart resolves an omitted or invalid initial range to `ALL` and accepts a valid
+  explicit `initialRange` without changing existing Run Detail callers.
+- Chat visualizations explicitly request `1Y` for daily data and `5D` for intraday data.
+- A component-level ECharts regression test records a user zoom, toggles an overlay indicator,
+  and verifies the next chart option preserves the selected start and end.
+
 Acceptance:
 
-- [ ] Existing Run Detail charts initially show their full range.
-- [ ] Chat daily and intraday charts use their intended defaults.
-- [ ] Changing indicators does not reset a user-selected zoom.
+- [x] Existing Run Detail charts initially show their full range.
+- [x] Chat daily and intraday charts use their intended defaults.
+- [x] Changing indicators does not reset a user-selected zoom.
 
 ### P1-07 Use locale-aware gain/loss colors
 
@@ -471,6 +479,10 @@ Each batch must be reviewable and reversible without depending on unfinished lat
   in-flight requests, AbortSignal cancellation, explicit retry invalidation, and run-scoped keys.
 - P1-05 focused frontend verification passed 7 tests; full Vitest passed 30 files/260 tests,
   and the production TypeScript/Vite build passed.
+- Completed P1-06 by restoring the reusable K-line default to `ALL`, adding a validated explicit
+  initial-range prop, and limiting the daily `1Y` / intraday `5D` defaults to chat charts.
+- P1-06 focused frontend verification passed 3 files/14 tests; full Vitest passed 31 files/263
+  tests, and the production TypeScript/Vite build passed.
 
 ## Completion record
 

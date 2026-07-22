@@ -4,8 +4,9 @@ import { api } from "@/lib/api";
 import { VisualizationRenderer } from "../VisualizationRenderer";
 
 vi.mock("@/components/charts/CandlestickChart", () => ({
-  CandlestickChart: ({ data, height, timeframe, linkGroup }: { data: unknown[]; height: number; timeframe?: string; linkGroup?: string | false }) => (
-    <div data-testid="candlestick-chart" data-link-group={String(linkGroup)}>
+  isIntradayTimeframe: (timeframe?: string) => ["1m", "5m", "15m", "30m", "1H"].includes(timeframe || ""),
+  CandlestickChart: ({ data, height, timeframe, linkGroup, initialRange }: { data: unknown[]; height: number; timeframe?: string; linkGroup?: string | false; initialRange?: string }) => (
+    <div data-testid="candlestick-chart" data-link-group={String(linkGroup)} data-initial-range={initialRange}>
       {data.length} bars at {height}px · {timeframe}
     </div>
   ),
@@ -73,6 +74,24 @@ describe("VisualizationRenderer", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getAllByTestId("candlestick-chart")).toHaveLength(1);
     expect(screen.getByTestId("candlestick-chart")).toHaveAttribute("data-link-group", "false");
+    expect(screen.getByTestId("candlestick-chart")).toHaveAttribute("data-initial-range", "1Y");
+  });
+
+  it("uses a five-day initial range for intraday chat charts", async () => {
+    vi.spyOn(api, "getRunVisualization").mockResolvedValue({
+      schema_version: 1,
+      visualization_id: "kline_intraday",
+      type: "candlestick_volume",
+      timeframe: "5m",
+      bars: [{ time: "2026-07-21T09:30:00", open: 10, high: 12, low: 9, close: 11, volume: 100 }],
+    });
+
+    render(<VisualizationRenderer
+      runId="run-intraday"
+      visualizations={[{ ...spec, visualization_id: "kline_intraday", data_ref: "kline_intraday", timeframe: "5m" }]}
+    />);
+
+    expect(await screen.findByTestId("candlestick-chart")).toHaveAttribute("data-initial-range", "5D");
   });
   it("isolates two simultaneous chat visualizations from global chart linking", async () => {
     vi.spyOn(api, "getRunVisualization").mockResolvedValue({
