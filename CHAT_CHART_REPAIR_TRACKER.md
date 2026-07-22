@@ -14,6 +14,34 @@
   backups remain untracked and are excluded from commits
 - Last updated: 2026-07-22
 
+## Midday pause handoff — 2026-07-22
+
+Pause state:
+
+- The chart repair implementation is complete through P1-07. There is no active code change or
+  partially implemented repair item at the pause point.
+- The validated source snapshot is `792209c`; the corresponding deployment-repository snapshot is
+  `20c3321`. Both were pushed before this handoff update.
+- The tracked source and deployment worktrees are clean. The only source-worktree entries are the
+  14 pre-existing untracked `.orig` backups, which must remain excluded unless the user explicitly
+  decides whether to archive or remove them.
+- The local ignored `.venv` contains pytest 9.1.1 and the declared development dependencies, so no
+  environment bootstrap should be repeated after the break.
+
+Resume order:
+
+1. Retry only the `^GSPC` live index smoke after Yahoo's rate-limit cooldown. Keep HTTP 429 as an
+   external-provider result; do not change working code merely to make that smoke test green.
+2. If no implementation changes are made, do not repeat the 5,300-test backend suite or the
+   266-test frontend suite; their passing evidence is already recorded below. Run focused tests
+   only if the index retry exposes a reproducible local defect.
+3. Confirm the user's decision for the 14 `.orig` backups, then close or archive this tracker and
+   open a fresh scoped tracker before beginning the next project.
+
+Non-blocking deferred work remains limited to the accessibility, localization, calendar wording,
+and bundle-size items listed later in this document. None should be folded into the index-smoke
+retry without an explicit scope decision.
+
 ### Status legend
 
 - `[ ]` Not started
