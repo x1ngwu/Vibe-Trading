@@ -25,6 +25,7 @@ class BaseTool(ABC):
     parameters: Dict[str, Any] = {}
     repeatable: bool = False
     is_readonly: bool = True
+    requires_current_run_dir: bool = False
 
     @classmethod
     def check_available(cls) -> bool:

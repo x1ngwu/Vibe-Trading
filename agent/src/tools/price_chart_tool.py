@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from src.agent.tools import BaseTool
-from src.market_data import detect_source, fetch_market_data, get_loader
-from src.tools.path_utils import safe_run_dir
+from src.market_data import YAHOO_INDEX_SYMBOLS, detect_source, fetch_market_data, get_loader
+from src.tools.path_utils import safe_path, safe_run_dir
 
 
 _MAX_SYMBOLS = 5
@@ -58,6 +58,8 @@ def _normalize_symbol(value: Any) -> str:
 
 
 def _market_for(symbol: str) -> str:
+    if symbol in YAHOO_INDEX_SYMBOLS:
+        return "US"
     if symbol.endswith((".SH", ".SZ", ".BJ")):
         return "A-share"
     if symbol.endswith(".HK"):
@@ -93,6 +95,8 @@ def _timezone_for(symbol: str, source: str) -> str:
 
 
 def _number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     try:
         number = float(value)
     except (TypeError, ValueError):
@@ -126,7 +130,7 @@ def _normalize_interval(value: Any) -> str:
     raise ValueError(f"unsupported interval {raw!r}; choose one of: {supported}")
 
 
-def _normalize_time(value: Any, interval: str) -> str | None:
+def _normalize_time(value: Any, interval: str) -> tuple[str, float] | None:
     text = str(value).strip()
     if not text:
         return None
@@ -134,49 +138,103 @@ def _normalize_time(value: Any, interval: str) -> str | None:
         normalized = text.replace(" ", "T", 1)
         if "T" not in normalized:
             return None
-        return normalized
-    return text.split("T", 1)[0].split(" ", 1)[0]
+        parse_text = (
+            normalized[:-1] + "+00:00"
+            if normalized.endswith("Z")
+            else normalized
+        )
+        try:
+            parsed = datetime.fromisoformat(parse_text)
+        except ValueError:
+            return None
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc)
+            normalized = parsed.isoformat()
+            sort_value = parsed.timestamp()
+        else:
+            normalized = parsed.isoformat()
+            sort_value = parsed.replace(tzinfo=timezone.utc).timestamp()
+        return normalized, sort_value
+
+    date_text = text.split("T", 1)[0].split(" ", 1)[0]
+    try:
+        day = date.fromisoformat(date_text)
+    except ValueError:
+        return None
+    return day.isoformat(), float(day.toordinal())
 
 
-def _normalize_bars(rows: Any, interval: str) -> tuple[list[dict[str, Any]], bool]:
+def _normalize_bars(rows: Any, interval: str) -> tuple[list[dict[str, Any]], bool, int]:
     if isinstance(rows, dict) and isinstance(rows.get("data"), list):
         rows = rows["data"]
     if not isinstance(rows, list):
-        return [], False
+        return [], False, 0
 
-    bars_by_time: dict[str, dict[str, Any]] = {}
+    bars_by_time: dict[str, tuple[float, dict[str, Any]]] = {}
+    dropped_bar_count = 0
     for row in rows:
         if not isinstance(row, dict):
+            dropped_bar_count += 1
             continue
         raw_time = next(
-            (row.get(key) for key in ("time", "trade_date", "date", "datetime", "timestamp", "index") if row.get(key) is not None),
+            (
+                row.get(key)
+                for key in (
+                    "time", "trade_date", "date", "datetime", "timestamp", "index"
+                )
+                if row.get(key) is not None
+            ),
             None,
         )
         if raw_time is None:
+            dropped_bar_count += 1
             continue
-        time_value = _normalize_time(raw_time, interval)
-        if time_value is None:
+        normalized_time = _normalize_time(raw_time, interval)
+        if normalized_time is None:
+            dropped_bar_count += 1
             continue
+        time_value, sort_value = normalized_time
 
         open_value = _number(row.get("open"))
         high_value = _number(row.get("high"))
         low_value = _number(row.get("low"))
         close_value = _number(row.get("close"))
-        volume_value = _number(row.get("volume"))
+        volume_raw = row["volume"] if "volume" in row else 0.0
+        volume_value = _number(volume_raw)
         if None in (open_value, high_value, low_value, close_value):
+            dropped_bar_count += 1
             continue
-        bars_by_time[time_value] = {
-            "time": time_value,
-            "open": open_value,
-            "high": high_value,
-            "low": low_value,
-            "close": close_value,
-            "volume": volume_value or 0.0,
-        }
+        if min(open_value, high_value, low_value, close_value) <= 0:
+            dropped_bar_count += 1
+            continue
+        if volume_value is None or volume_value < 0:
+            dropped_bar_count += 1
+            continue
+        if (
+            high_value < max(open_value, close_value, low_value)
+            or low_value > min(open_value, close_value, high_value)
+        ):
+            dropped_bar_count += 1
+            continue
 
-    bars = sorted(bars_by_time.values(), key=lambda bar: bar["time"])
+        if time_value in bars_by_time:
+            dropped_bar_count += 1
+        bars_by_time[time_value] = (
+            sort_value,
+            {
+                "time": time_value,
+                "open": open_value,
+                "high": high_value,
+                "low": low_value,
+                "close": close_value,
+                "volume": volume_value,
+            },
+        )
+
+    ordered = sorted(bars_by_time.values(), key=lambda item: item[0])
+    bars = [bar for _, bar in ordered]
     truncated = len(bars) > _MAX_BARS
-    return bars[-_MAX_BARS:], truncated
+    return bars[-_MAX_BARS:], truncated, dropped_bar_count
 
 
 def _date_range(start_date: Any, end_date: Any, interval: str) -> tuple[str, str]:
@@ -265,7 +323,10 @@ class PriceChartTool(BaseTool):
                 "items": {"type": "string"},
                 "minItems": 1,
                 "maxItems": _MAX_SYMBOLS,
-                "description": 'One to five symbols, for example ["600519.SH"] or ["AAPL.US", "700.HK"]. Bare six-digit A-share codes are accepted.',
+                "description": (
+                    'One to five symbols, for example ["600519.SH"], '
+                    '["AAPL.US", "700.HK"], or ["^GSPC"]. Bare six-digit A-share codes are accepted.'
+                ),
             },
             "start_date": {
                 "type": "string",
@@ -291,6 +352,7 @@ class PriceChartTool(BaseTool):
     }
     repeatable = True
     is_readonly = False
+    requires_current_run_dir = True
 
     def execute(self, **kwargs: Any) -> str:
         raw_codes = kwargs.get("codes")
@@ -302,6 +364,16 @@ class PriceChartTool(BaseTool):
             raise ValueError("at least one symbol is required")
         if len(codes) > _MAX_SYMBOLS:
             raise ValueError(f"at most {_MAX_SYMBOLS} symbols can be charted at once")
+        unsupported_indices = [
+            code
+            for code in codes
+            if code.startswith("^") and code not in YAHOO_INDEX_SYMBOLS
+        ]
+        if unsupported_indices:
+            supported = ", ".join(sorted(YAHOO_INDEX_SYMBOLS))
+            raise ValueError(
+                f"unsupported index symbol(s): {', '.join(unsupported_indices)}; supported Yahoo indices: {supported}"
+            )
 
         interval = _normalize_interval(kwargs.get("interval"))
         start_date, end_date = _date_range(
@@ -312,7 +384,7 @@ class PriceChartTool(BaseTool):
         if not run_dir_raw:
             raise ValueError("run_dir is required")
         run_dir = safe_run_dir(run_dir_raw)
-        output_dir = run_dir / "artifacts" / "visualizations"
+        output_dir = safe_path("artifacts/visualizations", run_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         requested_source = str(kwargs.get("source") or "auto").strip().lower()
@@ -360,7 +432,7 @@ class PriceChartTool(BaseTool):
             else:
                 unresolved.update(source_codes)
 
-        manifest_path = run_dir / "artifacts" / _MANIFEST_NAME
+        manifest_path = safe_path(f"artifacts/{_MANIFEST_NAME}", run_dir)
         manifest: list[dict[str, Any]] = []
         try:
             existing = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -371,7 +443,7 @@ class PriceChartTool(BaseTool):
 
         created: list[dict[str, Any]] = []
         for symbol in codes:
-            bars, row_truncated = _normalize_bars(data.get(symbol), interval)
+            bars, row_truncated, dropped_bar_count = _normalize_bars(data.get(symbol), interval)
             if not bars:
                 unresolved.add(symbol)
                 continue
@@ -403,6 +475,7 @@ class PriceChartTool(BaseTool):
                 "actual_end": bars[-1]["time"],
                 "fetched_at": fetched_at,
                 "truncated": truncated,
+                "dropped_bar_count": dropped_bar_count,
                 "bars": bars,
             }
             _write_json(output_dir / f"{visualization_id}.json", payload)
@@ -420,6 +493,7 @@ class PriceChartTool(BaseTool):
                 {
                     "title": f"{symbol} K-line",
                     "bar_count": len(bars),
+                    "dropped_bar_count": dropped_bar_count,
                     "truncated": truncated,
                     "data_ref": visualization_id,
                     "fallback_text": f"{symbol}: {len(bars)} {interval} bars ({bars[0]['time']} to {bars[-1]['time']})",

@@ -22,6 +22,7 @@ import pandas as pd
 from backtest.loaders import yahoo_client
 from backtest.loaders.base import cached_loader_fetch, validate_date_range
 from backtest.loaders.registry import register
+from src.market_data import YAHOO_INDEX_SYMBOLS
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +40,11 @@ _INTERVAL_MAP = {
 
 
 def _is_supported(code: str) -> bool:
-    """Return whether *code* is a symbol this loader handles (US/HK/India)."""
-    return code.strip().upper().endswith((".US", ".HK", ".NS", ".BO"))
+    """Return whether *code* is a supported US/HK/India symbol or US index."""
+    normalized = code.strip().upper()
+    return normalized in YAHOO_INDEX_SYMBOLS or normalized.endswith(
+        (".US", ".HK", ".NS", ".BO")
+    )
 
 
 def _to_yahoo_interval(interval: str) -> str:

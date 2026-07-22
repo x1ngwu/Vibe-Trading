@@ -37,6 +37,9 @@ from src.market_data import (
         ("000001.SZ", "tencent"),
         ("430139.BJ", "tencent"),
         ("AAPL.US", "yahoo"),
+        ("^GSPC", "yahoo"),
+        ("^IXIC", "yahoo"),
+        ("^DJI", "yahoo"),
         ("700.HK", "yahoo"),
         ("00700.HK", "yahoo"),
         ("RELIANCE.NS", "yahoo"),  # India NSE

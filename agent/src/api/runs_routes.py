@@ -371,6 +371,13 @@ def register_runs_routes(
         }
         if isinstance(payload.get("truncated"), bool):
             response["truncated"] = payload["truncated"]
+        dropped_bar_count = payload.get("dropped_bar_count")
+        if (
+            isinstance(dropped_bar_count, int)
+            and not isinstance(dropped_bar_count, bool)
+            and 0 <= dropped_bar_count <= 10_000
+        ):
+            response["dropped_bar_count"] = dropped_bar_count
         for field in (
             "symbol", "market", "timeframe", "source", "adjustment", "timezone",
             "requested_start", "requested_end", "effective_fetch_start", "effective_fetch_end",

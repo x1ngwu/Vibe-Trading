@@ -23,6 +23,17 @@ unless they are explicitly sanitized fixtures.
 
 ## Safe Local Checks
 
+Create an isolated test environment once per checkout:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e ".[dev]"
+```
+
+On Debian/Ubuntu, install the matching `python3-venv` package first if
+`ensurepip` is unavailable. The repository ignores `.venv/`.
+
 These commands are normally safe for local validation:
 
 ```bash
@@ -30,13 +41,17 @@ git status --short --branch
 git diff --check
 python -m compileall -q agent/cli
 python -m py_compile agent/api_server.py agent/mcp_server.py
-pytest --ignore=agent/tests/e2e_backtest --ignore=agent/tests/test_e2e_harness_v2.py --tb=short -q
+TUSHARE_TOKEN=your-tushare-token pytest --ignore=agent/tests/e2e_backtest --ignore=agent/tests/test_e2e_harness_v2.py --tb=short -q
 pytest agent/tests/test_sdk_order_gate.py agent/tests/test_mandate_enforcement.py -q
 cd frontend && npm ci && npm run build
 ```
 
 Use the narrowest test command that matches the changed files when a full suite
 is too expensive, and state what was not run.
+
+The explicit placeholder above keeps real Tushare E2E tests disabled even if
+another test loads `agent/.env` into the process. Run those tests separately
+with a verified token when live-provider coverage is intended.
 
 ## High-Risk Surfaces
 
@@ -59,7 +74,7 @@ of routine PR validation.
 For general Python changes:
 
 ```bash
-pytest --ignore=agent/tests/e2e_backtest --ignore=agent/tests/test_e2e_harness_v2.py --tb=short -q
+TUSHARE_TOKEN=your-tushare-token pytest --ignore=agent/tests/e2e_backtest --ignore=agent/tests/test_e2e_harness_v2.py --tb=short -q
 ```
 
 For live/order safety changes:

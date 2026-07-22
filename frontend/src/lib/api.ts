@@ -387,6 +387,7 @@ export interface RunVisualization {
   actual_end?: string;
   fetched_at?: string;
   truncated?: boolean;
+  dropped_bar_count?: number;
   bars: PriceBar[];
 }
 

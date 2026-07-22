@@ -58,6 +58,7 @@ export interface VisualizationSpec {
   actual_end?: string;
   fetched_at?: string;
   bar_count?: number;
+  dropped_bar_count?: number;
   truncated?: boolean;
   fallback_text?: string;
 }

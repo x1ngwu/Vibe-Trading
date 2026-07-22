@@ -60,6 +60,11 @@ class TestSymbolGating:
         assert _is_supported("AAPL.US") is True
         assert _is_supported("aapl.us") is True
 
+    def test_accepts_verified_us_indices(self):
+        assert _is_supported("^GSPC") is True
+        assert _is_supported("^IXIC") is True
+        assert _is_supported("^DJI") is True
+
     def test_accepts_hk(self):
         assert _is_supported("00700.HK") is True
         assert _is_supported("00700.hk") is True
@@ -228,6 +233,16 @@ class TestFetch:
         assert len(out["AAPL.US"]) == 2
         # Symbol passes through to the client unchanged (client maps it).
         assert mock_chart.call_args.args[0] == "AAPL.US"
+
+    def test_fetch_index_symbol_preserves_yahoo_identifier(self):
+        rows = [_row("2024-01-02", 10, 11, 9, 10.5, 1000)]
+        with patch(
+            "backtest.loaders.yahoo_loader.yahoo_client.get_chart",
+            return_value=rows,
+        ) as mock_chart:
+            out = DataLoader().fetch(["^GSPC"], "2024-01-01", "2024-01-31")
+        assert list(out) == ["^GSPC"]
+        assert mock_chart.call_args.args[0] == "^GSPC"
         # period1/period2 derived from the dates; period2 is exclusive (+1 day).
         kwargs = mock_chart.call_args.kwargs
         assert kwargs["period1"] == _epoch("2024-01-01")

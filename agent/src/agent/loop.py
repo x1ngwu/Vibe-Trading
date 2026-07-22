@@ -486,13 +486,29 @@ def _is_tool_success(result: str) -> bool:
     return True
 
 
-def _normalize_tool_run_dir(args: dict[str, Any], memory_run_dir: str | None) -> dict[str, Any]:
+def _normalize_tool_run_dir(
+    args: dict[str, Any],
+    memory_run_dir: str | None,
+    *,
+    requires_current_run_dir: bool = False,
+) -> dict[str, Any]:
     """Normalize ``run_dir`` in tool args to an absolute path when possible.
+
+    Tools that declare ``requires_current_run_dir`` cannot accept a model-supplied
+    path: their ``run_dir`` is replaced with the active attempt directory. If no
+    active directory exists, the argument is removed so the tool fails closed.
 
     If the model supplies a relative ``run_dir`` (for example ``"."`` or
     ``"risk_parity_run"``), resolve it against the active run directory.
     """
     normalized = dict(args)
+    if requires_current_run_dir:
+        if not memory_run_dir:
+            normalized.pop("run_dir", None)
+            return normalized
+        normalized["run_dir"] = str(Path(memory_run_dir).resolve())
+        return normalized
+
     if not memory_run_dir:
         return normalized
 
@@ -1193,7 +1209,12 @@ class AgentLoop:
         # Prepare args + emit events
         runnable: list[tuple] = []
         for tc in tool_calls:
-            args = _normalize_tool_run_dir(tc.arguments, self.memory.run_dir)
+            tool_def = self.registry.get(tc.name)
+            args = _normalize_tool_run_dir(
+                tc.arguments,
+                self.memory.run_dir,
+                requires_current_run_dir=bool(getattr(tool_def, "requires_current_run_dir", False)),
+            )
             redacted_args = redact_payload(args)
             event_args = {k: str(v)[:200] for k, v in redacted_args.items()}
             self._emit("tool_call", {"tool": tc.name, "arguments": event_args, "iter": iteration})
@@ -1239,7 +1260,12 @@ class AgentLoop:
             react_trace: React trace list.
             iteration: Current iteration.
         """
-        args = _normalize_tool_run_dir(tc.arguments, self.memory.run_dir)
+        tool_def = self.registry.get(tc.name)
+        args = _normalize_tool_run_dir(
+            tc.arguments,
+            self.memory.run_dir,
+            requires_current_run_dir=bool(getattr(tool_def, "requires_current_run_dir", False)),
+        )
 
         redacted_args = redact_payload(args)
         event_args = {k: str(v)[:200] for k, v in redacted_args.items()}

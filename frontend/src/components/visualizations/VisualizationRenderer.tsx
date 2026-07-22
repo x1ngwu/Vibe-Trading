@@ -81,6 +81,9 @@ function ChartPanel({ runId, spec }: ChartPanelProps) {
           {subtitle && <span>{subtitle}</span>}
           {range && <span>{range}</span>}
           {spec.bar_count != null && <span>{spec.truncated ? `latest ${spec.bar_count}` : spec.bar_count} bars</span>}
+          {spec.dropped_bar_count != null && spec.dropped_bar_count > 0 && (
+            <span>dropped {spec.dropped_bar_count} invalid/duplicate bars</span>
+          )}
         </div>
         {data?.bars.length ? (() => {
           const latest = data.bars[data.bars.length - 1];

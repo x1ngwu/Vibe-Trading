@@ -20,6 +20,7 @@ from src.agent.loop import (
     _is_tool_success,
     _normalize_tool_run_dir,
 )
+from src.agent.tools import BaseTool
 
 
 def _apply_microcompact_gate(messages: list) -> None:
@@ -327,3 +328,29 @@ class TestNormalizeToolRunDir:
         args = {"run_dir": absolute_run_dir}
         out = _normalize_tool_run_dir(args, "/tmp/run_123")
         assert out["run_dir"] == absolute_run_dir
+
+    def test_forces_current_run_dir_for_scoped_tool(self) -> None:
+        absolute_run_dir = os.path.abspath("/var/tmp/another_run")
+        args = {"run_dir": absolute_run_dir}
+
+        out = _normalize_tool_run_dir(
+            args,
+            "/tmp/run_123",
+            requires_current_run_dir=True,
+        )
+
+        assert out["run_dir"] == str(Path("/tmp/run_123").resolve())
+
+    def test_drops_model_run_dir_when_current_run_is_unavailable(self) -> None:
+        args = {"run_dir": os.path.abspath("/var/tmp/another_run")}
+
+        out = _normalize_tool_run_dir(
+            args,
+            None,
+            requires_current_run_dir=True,
+        )
+
+        assert "run_dir" not in out
+
+    def test_base_tool_does_not_force_current_run_by_default(self) -> None:
+        assert BaseTool.requires_current_run_dir is False

@@ -27,6 +27,7 @@ def test_get_run_visualization_returns_sanitized_payload(monkeypatch, tmp_path) 
         "effective_fetch_end": "2026-07-21",
         "retention_policy": "latest_contiguous_up_to_5000_bars",
         "truncated": True,
+        "dropped_bar_count": 3,
         "secret": "must-not-leak",
         "bars": [
             {"time": "2026-07-21T09:35:00", "open": 10, "high": 12, "low": 9, "close": 11, "volume": 100},
@@ -38,6 +39,7 @@ def test_get_run_visualization_returns_sanitized_payload(monkeypatch, tmp_path) 
     assert response.json()["bars"][0]["close"] == 11
     assert response.json()["bars"][0]["time"] == "2026-07-21T09:35:00"
     assert response.json()["truncated"] is True
+    assert response.json()["dropped_bar_count"] == 3
     assert response.json()["timezone"] == "UTC"
     assert response.json()["effective_fetch_start"] == "2026-07-15"
     assert response.json()["effective_fetch_end"] == "2026-07-21"

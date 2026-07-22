@@ -34,6 +34,41 @@ def test_system_prompt_routes_chart_requests_to_price_chart_tool() -> None:
     assert "latest five years" in _SYSTEM_PROMPT
 
 
+def test_price_chart_declares_current_run_scope() -> None:
+    assert price_chart_tool.PriceChartTool.requires_current_run_dir is True
+
+
+@pytest.mark.parametrize("symbol", ["^GSPC", "^IXIC", "^DJI"])
+def test_price_chart_preserves_verified_us_index_symbols(symbol) -> None:
+    assert price_chart_tool._normalize_symbol(symbol) == symbol
+    assert price_chart_tool._market_for(symbol) == "US"
+
+
+def test_price_chart_rejects_unsupported_yahoo_index() -> None:
+    with pytest.raises(ValueError, match="unsupported index symbol.*\\^RUT"):
+        price_chart_tool.PriceChartTool().execute(
+            codes=["^RUT"], run_dir="unused"
+        )
+
+
+def test_price_chart_rejects_symlinked_artifact_escape(monkeypatch, tmp_path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}_outside"
+    outside.mkdir()
+    artifacts = tmp_path / "artifacts"
+    try:
+        artifacts.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable on this platform")
+
+    monkeypatch.setattr(price_chart_tool, "safe_run_dir", lambda _value: tmp_path)
+
+    with pytest.raises(ValueError, match="escapes the workspace root"):
+        price_chart_tool.PriceChartTool().execute(
+            codes=["AAPL.US"],
+            run_dir="ignored-in-test",
+        )
+
+
 def test_price_chart_tool_persists_compact_manifest(monkeypatch, tmp_path) -> None:
     calls = {}
 
@@ -113,6 +148,40 @@ def test_intraday_fetch_window_is_bounded_before_loader(
         "2026-07-20",
         end_date,
     ) == "2026-07-20"
+
+
+def test_normalize_bars_drops_invalid_rows_deduplicates_and_sorts() -> None:
+    def make_bar(time: str, **updates):
+        row = {
+            "trade_date": time,
+            "open": 10,
+            "high": 12,
+            "low": 9,
+            "close": 11,
+            "volume": 100,
+        }
+        row.update(updates)
+        return row
+
+    rows = [
+        make_bar("2026-07-21 10:01:00"),
+        make_bar("2026-07-21 10:00:00", close=10),
+        make_bar("2026-07-21 10:00:00", close=10.5),
+        make_bar("not-a-time"),
+        make_bar("2026-07-21 10:02:00", open=0),
+        make_bar("2026-07-21 10:03:00", high=10, close=11),
+        make_bar("2026-07-21 10:04:00", volume=-1),
+    ]
+
+    bars, truncated, dropped_bar_count = price_chart_tool._normalize_bars(rows, "1m")
+
+    assert truncated is False
+    assert dropped_bar_count == 5
+    assert [bar["time"] for bar in bars] == [
+        "2026-07-21T10:00:00",
+        "2026-07-21T10:01:00",
+    ]
+    assert bars[0]["close"] == 10.5
 
 
 def test_price_chart_tool_routes_a_share_intraday_and_preserves_timestamp(monkeypatch, tmp_path) -> None:
@@ -322,6 +391,7 @@ def test_visualization_manifest_loader_sanitizes_entries(tmp_path) -> None:
             "retention_policy": "latest_contiguous_up_to_5000_bars",
             "bar_count": 2,
             "truncated": True,
+            "dropped_bar_count": 3,
             "unexpected": {"do_not_forward": True},
         },
         {
@@ -343,4 +413,5 @@ def test_visualization_manifest_loader_sanitizes_entries(tmp_path) -> None:
         "retention_policy": "latest_contiguous_up_to_5000_bars",
         "bar_count": 2,
         "truncated": True,
+        "dropped_bar_count": 3,
     }]

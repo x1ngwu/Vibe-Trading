@@ -13,6 +13,7 @@ describe("parseVisualizationSpecs", () => {
       effective_fetch_end: "2026-07-21",
       retention_policy: "latest_contiguous_up_to_5000_bars",
       bar_count: 252,
+      dropped_bar_count: 3,
       truncated: true,
       ignored: "value",
     }])).toEqual([{
@@ -26,6 +27,7 @@ describe("parseVisualizationSpecs", () => {
       effective_fetch_end: "2026-07-21",
       retention_policy: "latest_contiguous_up_to_5000_bars",
       bar_count: 252,
+      dropped_bar_count: 3,
       truncated: true,
     }]);
   });

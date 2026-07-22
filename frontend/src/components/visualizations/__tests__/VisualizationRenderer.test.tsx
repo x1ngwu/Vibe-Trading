@@ -25,6 +25,7 @@ const spec = {
   actual_start: "2026-07-01",
   actual_end: "2026-07-21",
   bar_count: 1,
+  dropped_bar_count: 3,
 };
 
 describe("VisualizationRenderer", () => {
@@ -42,6 +43,7 @@ describe("VisualizationRenderer", () => {
     expect(await screen.findByText("1 bars at 340px · 1D")).toBeInTheDocument();
     expect(api.getRunVisualization).toHaveBeenCalledWith("run-chart", "kline_demo");
     expect(screen.getByText("C 11.00")).toBeInTheDocument();
+    expect(screen.getByText("dropped 3 invalid/duplicate bars")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /expand chart/i }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();

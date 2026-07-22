@@ -6,12 +6,13 @@
 
 ## Status
 
-- Overall: **P0 implementation complete; backend pytest verification pending; P1 not started**
+- Overall: **P0 implementation and focused verification complete; P1-02 end-to-end verification remains open; P1-03/P1-04 focused verification complete**
 - Priority order: **P0 blockers first, then P1 correctness/performance**
 - Opened: 2026-07-21
 - Baseline commit: `d5f8297`
-- Working tree: contains tracked modifications and untracked chart implementation files
-- Last updated: 2026-07-21
+- Repair batch: implementation, tests, and documentation are tracked; 14 local `.orig` patch
+  backups remain untracked and are excluded from commits
+- Last updated: 2026-07-22
 
 ### Status legend
 
@@ -108,13 +109,15 @@ For any code or close structural port, add a provenance entry before marking the
 - [x] Runtime registry exposed `show_price_chart` with intervals `1m/5m/15m/30m/1H/1D`.
 - [x] Visualization API smoke test returned a sanitized payload with HTTP 200.
 - [x] Chart artifact creation smoke test succeeded in a temporary run directory.
-- [!] Backend pytest suite was not executed because pytest is absent from the current host and production image.
+- [x] Focused backend chart/API/loop/market-data/Yahoo tests passed: 119 tests.
+- [x] The broad non-live backend suite passed 5,297 tests and skipped 9 live/environment-gated
+  tests when run with the documented explicit Tushare placeholder.
 
 ## P0 — release blockers
 
 ### P0-01 Bound intraday fetches before materialization
 
-Status: `[-]` — implemented; focused backend pytest pending
+Status: `[x]` — implemented and focused backend pytest verified
 
 Problem:
 
@@ -138,11 +141,11 @@ Acceptance:
 - [x] Returned bars are the latest contiguous bars, not sampled bars.
 - [x] Five-symbol requests remain bounded to about 25,000 retained bars total.
 - [x] Tool output clearly reports truncation and effective range.
-- [ ] Added tests cover historical/current ranges, crypto 24/7 data, and exchange sessions; backend pytest execution remains pending.
+- [x] Added tests cover historical/current ranges, crypto 24/7 data, and exchange sessions.
 
 ### P0-02 Make the interval contract consistent
 
-Status: `[-]` — implemented; focused backend pytest pending
+Status: `[x]` — implemented and focused backend pytest verified
 
 Problem:
 
@@ -157,12 +160,12 @@ Decision:
 Acceptance:
 
 - [x] System prompt, JSON schema, runtime normalization, and descriptions list the same intervals.
-- [ ] A regression test compares the advertised intervals with the tool enum; execution remains pending.
-- [ ] Unsupported-interval regression test exists; execution remains pending.
+- [x] A regression test compares the advertised intervals with the tool enum.
+- [x] Unsupported-interval regression test passes.
 
 ### P0-03 Eliminate tooltip HTML injection
 
-Status: `[-]` — frontend verified; API regression execution pending
+Status: `[x]` — frontend and focused API regressions verified
 
 Problem:
 
@@ -177,9 +180,9 @@ Planned repair:
 
 Acceptance:
 
-- [ ] Series-name and marker fixtures pass; malicious API timestamp regression execution remains pending.
+- [x] Series-name, marker, and malicious API timestamp fixtures pass.
 - [x] Normal tooltips retain OHLC, change percentage, volume, and indicator values.
-- [ ] API now returns HTTP 422 for invalid time/OHLCV/order; endpoint regression execution remains pending.
+- [x] API returns HTTP 422 for invalid time/OHLCV/order.
 
 ### P0-04 Isolate chat chart interactions
 
@@ -225,45 +228,75 @@ Acceptance:
 
 ### P1-02 Restrict writes to the current attempt run
 
-Status: `[ ]`
+Status: `[-]` — focused backend pytest passed; end-to-end cross-run verification pending
 
 Planned repair:
 
 - Prevent model-supplied arguments from overriding the current attempt's injected `run_dir`.
 - Add a reusable tool capability/property rather than relying on a fragile tool-name special case.
 
+Implementation evidence:
+
+- Added `BaseTool.requires_current_run_dir`, enabled it for `PriceChartTool`, and applied it in
+  both parallel and sequential `AgentLoop` tool execution paths.
+- A model-supplied `run_dir` is replaced by the active attempt directory; without an active
+  attempt directory the argument is removed so the tool fails closed.
+- Visualization and manifest paths now use containment-aware `safe_path` resolution, including
+  protection against symlink escapes.
+- Unit regressions cover forced current-run injection, missing-current-run failure, the default
+  capability value, and a symlinked artifact escape. The focused backend tests pass.
+
 Acceptance:
 
-- [ ] A supplied absolute path to another run is overwritten or rejected.
-- [ ] The tool can write only beneath the current run's visualization artifact directory.
+- [x] A supplied absolute path to another run is overwritten or rejected.
+- [x] The tool can write only beneath the current run's visualization artifact directory.
 - [ ] Cross-run overwrite regression test passes.
 
 ### P1-03 Support the index symbols that are advertised
 
-Status: `[ ]`
+Status: `[x]` — implemented and focused backend pytest verified for the supported Yahoo identifiers
 
 Planned repair:
 
 - Route common Yahoo index identifiers such as `^GSPC`, `^IXIC`, and `^DJI`.
 - Align the tool description with the symbol formats actually supported.
 
+Implementation evidence:
+
+- Added verified support for `^GSPC`, `^IXIC`, and `^DJI` in source detection, Yahoo loader
+  gating, market classification, and the chart-tool description.
+- The original Yahoo identifier/display symbol is preserved through fetch and chart creation.
+- Other caret-prefixed index identifiers are rejected with a supported-symbol error instead of
+  being routed to an unrelated provider.
+- Regression tests pass for routing, loader acceptance, identifier preservation, and
+  unsupported-index errors.
+
 Acceptance:
 
-- [ ] Common US index symbols route to Yahoo and preserve the original display symbol.
-- [ ] A-share index codes continue to route correctly.
-- [ ] Unsupported index formats produce a useful error instead of a misleading source choice.
+- [x] Common US index symbols route to Yahoo and preserve the original display symbol.
+- [x] A-share index codes continue to route correctly.
+- [x] Unsupported index formats produce a useful error instead of a misleading source choice.
 
 ### P1-04 Validate OHLCV semantics and time ordering
 
-Status: `[ ]`
+Status: `[x]` — implemented with a reported drop policy and focused backend pytest verified
+
+Implemented policy:
+
+- Invalid and duplicate provider rows are dropped before persistence rather than rejecting the
+  whole symbol. Duplicate normalized timestamps keep the last provider row.
+- The retained rows are normalized and sorted into strict ascending order.
+- `dropped_bar_count` is persisted in the visualization payload and manifest, sanitized by the
+  API/session boundaries, and shown in the chat chart metadata when non-zero.
+- The focused normalization regression test passes.
 
 Acceptance:
 
-- [ ] Prices are finite and strictly positive.
-- [ ] `high` brackets open/close/low and `low` brackets open/close/high.
-- [ ] Volume is finite and non-negative.
-- [ ] Timestamps are parseable, normalized, de-duplicated, and strictly ascending.
-- [ ] Invalid rows follow one documented reject/drop policy and are reported.
+- [x] Prices are finite and strictly positive.
+- [x] `high` brackets open/close/low and `low` brackets open/close/high.
+- [x] Volume is finite and non-negative.
+- [x] Timestamps are parseable, normalized, de-duplicated, and strictly ascending.
+- [x] Invalid rows follow one documented reject/drop policy and are reported.
 
 ## P1 — frontend performance and compatibility
 
@@ -328,12 +361,12 @@ same component makes them effectively free to include.
 
 ### Backend
 
-- [ ] Focused chart tool tests.
-- [ ] Visualization API validation/security tests.
-- [ ] SessionService persistence and historical replay tests.
-- [ ] AgentLoop current-run injection test.
+- [x] Focused chart tool tests.
+- [x] Visualization API validation/security tests.
+- [x] SessionService persistence and historical replay tests.
+- [x] AgentLoop current-run injection test.
 - [ ] Provider fallback and interval capability tests.
-- [ ] Runtime registry smoke test.
+- [x] Runtime registry smoke test.
 - [ ] Real-data smoke tests for A-share daily/minute, US daily/minute, index, and crypto.
 
 ### Frontend
@@ -382,6 +415,28 @@ Each batch must be reviewable and reversible without depending on unfinished lat
   Python syntax checks, `git diff --check`, and isolated P0 backend behavior smoke passed.
 - Backend pytest still cannot run because the host and current production image do not contain
   the project runtime/test dependencies. P0-01/P0-02/P0-03 remain in progress until those tests run.
+- Reconciled the tracker after the interrupted P1 work. P1 is no longer "not started": P1-02,
+  P1-03, and P1-04 have implementations and regression tests in the working tree.
+- P1-02 now forces the active attempt directory for scoped tools and contains visualization paths;
+  formal pytest and an end-to-end cross-run overwrite check remain pending.
+- P1-03 now routes and preserves `^GSPC`, `^IXIC`, and `^DJI`, and rejects unsupported caret-prefixed
+  indices with an explicit supported-symbol error.
+- P1-04 now drops invalid/duplicate rows, normalizes and sorts timestamps, and reports the dropped
+  count through persistence, API sanitization, types, and chat metadata.
+- Refreshed verification after the P1 changes: full Vitest passed 30 files/255 tests, the production
+  frontend build passed, changed Python files passed syntax compilation, and `git diff --check` passed.
+- Backend pytest remains blocked with `/usr/bin/python3: No module named pytest`; the new P1 backend
+  regressions therefore remain unexecuted.
+- Worktree hygiene remains open: 14 untracked `.orig` patch backups still need removal.
+
+### 2026-07-22
+
+- Installed the host's `python3.12-venv` support and created a repository-local, ignored `.venv`.
+- Installed the project in editable mode with its declared `.[dev]` dependencies, including
+  pytest 9.1.1, pytest-cov 7.1.0, and pytest-socket 0.8.0.
+- Focused chart/API/loop/market-data/Yahoo verification passed: 119 tests.
+- The final broad non-live backend run passed 5,297 tests and skipped 9 live/environment-gated
+  tests. Frontend Vitest passed 30 files/255 tests, and the production build passed.
 
 ## Completion record
 

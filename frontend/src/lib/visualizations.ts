@@ -34,6 +34,9 @@ export function parseVisualizationSpecs(value: unknown): VisualizationSpec[] {
     if (typeof raw.bar_count === "number" && Number.isInteger(raw.bar_count) && raw.bar_count >= 0) {
       spec.bar_count = raw.bar_count;
     }
+    if (typeof raw.dropped_bar_count === "number" && Number.isInteger(raw.dropped_bar_count) && raw.dropped_bar_count >= 0) {
+      spec.dropped_bar_count = raw.dropped_bar_count;
+    }
     if (typeof raw.truncated === "boolean") spec.truncated = raw.truncated;
     return [spec];
   }).slice(0, 5);

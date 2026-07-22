@@ -85,9 +85,12 @@ def load_visualization_specs(run_dir: Path) -> list[Dict[str, Any]]:
             value = item.get(key)
             if isinstance(value, str):
                 spec[key] = value[:500]
-        bar_count = item.get("bar_count")
-        if isinstance(bar_count, int) and 0 <= bar_count <= 10_000:
-            spec["bar_count"] = bar_count
+        for field in ("bar_count", "dropped_bar_count"):
+            count = item.get(field)
+            if (
+                isinstance(count, int) and not isinstance(count, bool) and 0 <= count <= 10_000
+            ):
+                spec[field] = count
         if isinstance(item.get("truncated"), bool):
             spec["truncated"] = item["truncated"]
         specs.append(spec)
