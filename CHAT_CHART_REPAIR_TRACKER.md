@@ -6,7 +6,7 @@
 
 ## Status
 
-- Overall: **P0 complete; P1-01/P1-03/P1-04 complete; P1-02 end-to-end verification remains open; frontend P1 work remains**
+- Overall: **P0 and backend P1-01 through P1-04 complete; frontend P1 work remains**
 - Priority order: **P0 blockers first, then P1 correctness/performance**
 - Opened: 2026-07-21
 - Baseline commit: `d5f8297`
@@ -240,7 +240,7 @@ Acceptance:
 
 ### P1-02 Restrict writes to the current attempt run
 
-Status: `[-]` — focused backend pytest passed; end-to-end cross-run verification pending
+Status: `[x]` — implementation, focused tests, and cross-run verification complete
 
 Planned repair:
 
@@ -257,12 +257,14 @@ Implementation evidence:
   protection against symlink escapes.
 - Unit regressions cover forced current-run injection, missing-current-run failure, the default
   capability value, and a symlinked artifact escape. The focused backend tests pass.
+- An AgentLoop-to-PriceChartTool regression supplies another run's absolute path, preserves that
+  run's sentinel manifest byte-for-byte, and verifies artifacts are written only to the active run.
 
 Acceptance:
 
 - [x] A supplied absolute path to another run is overwritten or rejected.
 - [x] The tool can write only beneath the current run's visualization artifact directory.
-- [ ] Cross-run overwrite regression test passes.
+- [x] Cross-run overwrite regression test passes.
 
 ### P1-03 Support the index symbols that are advertised
 
@@ -453,6 +455,8 @@ Each batch must be reviewable and reversible without depending on unfinished lat
   retry, actual-source persistence, and structured source-attempt diagnostics.
 - P1-01 focused chart/API/loop/market-data/Yahoo verification passed 122 tests; the updated broad
   non-live backend suite passed 5,300 tests and skipped 9 live/environment-gated tests.
+- Closed P1-02 with a real AgentLoop-to-PriceChartTool cross-run overwrite regression; the
+  malicious target run remains untouched and the active run receives the visualization.
 
 ## Completion record
 
