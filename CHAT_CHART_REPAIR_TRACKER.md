@@ -6,7 +6,7 @@
 
 ## Status
 
-- Overall: **P0 and backend P1-01 through P1-04 complete; frontend P1 work remains**
+- Overall: **P0, backend P1-01 through P1-04, and frontend P1-05 complete; P1-06/P1-07 remain**
 - Priority order: **P0 blockers first, then P1 correctness/performance**
 - Opened: 2026-07-21
 - Baseline commit: `d5f8297`
@@ -316,7 +316,7 @@ Acceptance:
 
 ### P1-05 Lazy-load and cache historical visualizations
 
-Status: `[ ]`
+Status: `[x]` — implemented and verified
 
 Planned repair:
 
@@ -325,11 +325,21 @@ Planned repair:
 - Cancel in-flight requests on unmount/session change.
 - Reuse cached data when switching symbol tabs or reopening an expanded chart.
 
+Implementation evidence:
+
+- `IntersectionObserver` starts chart requests only when a panel approaches the viewport, with a
+  400px prefetch margin and a safe immediate-load fallback when the API is unavailable.
+- A bounded 100-entry cache is keyed by `runId + visualizationId`, reuses completed responses,
+  and shares in-flight requests with subscriber reference counting.
+- The API accepts an `AbortSignal`; unmount/session changes release subscribers and abort an
+  orphaned request, while stale promises cannot update the replacement component.
+- Retry explicitly invalidates failed/cached state and starts a fresh request.
+
 Acceptance:
 
-- [ ] Loading a long session does not immediately fetch every historical chart.
-- [ ] Returning to a previously loaded chart causes no duplicate network request.
-- [ ] Session switches do not update an unmounted chart.
+- [x] Loading a long session does not immediately fetch every historical chart.
+- [x] Returning to a previously loaded chart causes no duplicate network request.
+- [x] Session switches do not update an unmounted chart.
 
 ### P1-06 Preserve existing Run Detail defaults
 
@@ -387,9 +397,9 @@ same component makes them effectively free to include.
 
 - [x] Tooltip injection regression tests.
 - [x] Independent multi-chart isolation tests.
-- [ ] Failure/retry and request-cancellation tests.
-- [ ] Multi-symbol tab caching tests.
-- [ ] Historical message restoration tests.
+- [x] Failure/retry and request-cancellation tests.
+- [x] Multi-symbol tab caching tests.
+- [x] Historical message restoration tests.
 - [x] Full Vitest suite.
 - [x] TypeScript production build.
 
@@ -457,6 +467,10 @@ Each batch must be reviewable and reversible without depending on unfinished lat
   non-live backend suite passed 5,300 tests and skipped 9 live/environment-gated tests.
 - Closed P1-02 with a real AgentLoop-to-PriceChartTool cross-run overwrite regression; the
   malicious target run remains untouched and the active run receives the visualization.
+- Completed P1-05 with viewport-triggered loading, a bounded run/visualization cache, shared
+  in-flight requests, AbortSignal cancellation, explicit retry invalidation, and run-scoped keys.
+- P1-05 focused frontend verification passed 7 tests; full Vitest passed 30 files/260 tests,
+  and the production TypeScript/Vite build passed.
 
 ## Completion record
 

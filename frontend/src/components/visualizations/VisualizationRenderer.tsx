@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Maximize2, RefreshCw, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { CandlestickChart } from "@/components/charts/CandlestickChart";
@@ -17,6 +17,88 @@ interface ChartPanelProps {
   spec: VisualizationSpec;
 }
 
+interface VisualizationCacheEntry {
+  data?: RunVisualization;
+  promise?: Promise<RunVisualization>;
+  controller?: AbortController;
+  subscribers: number;
+}
+
+const MAX_VISUALIZATION_CACHE_ENTRIES = 100;
+const visualizationCache = new Map<string, VisualizationCacheEntry>();
+
+function visualizationCacheKey(runId: string, visualizationId: string): string {
+  return `${runId}\u0000${visualizationId}`;
+}
+
+function pruneVisualizationCache(): void {
+  if (visualizationCache.size <= MAX_VISUALIZATION_CACHE_ENTRIES) return;
+  for (const [key, entry] of visualizationCache) {
+    if (!entry.promise) visualizationCache.delete(key);
+    if (visualizationCache.size <= MAX_VISUALIZATION_CACHE_ENTRIES) break;
+  }
+}
+
+function acquireVisualization(
+  runId: string,
+  visualizationId: string,
+): { promise: Promise<RunVisualization>; release: () => void } {
+  const key = visualizationCacheKey(runId, visualizationId);
+  let entry = visualizationCache.get(key);
+  if (!entry) {
+    const controller = new AbortController();
+    entry = { controller, subscribers: 0 };
+    const activeEntry = entry;
+    activeEntry.promise = api.getRunVisualization(runId, visualizationId, controller.signal)
+      .then((data) => {
+        if (visualizationCache.get(key) === activeEntry) {
+          activeEntry.data = data;
+          activeEntry.promise = undefined;
+          activeEntry.controller = undefined;
+          visualizationCache.delete(key);
+          visualizationCache.set(key, activeEntry);
+          pruneVisualizationCache();
+        }
+        return data;
+      })
+      .catch((error: unknown) => {
+        if (visualizationCache.get(key) === activeEntry) visualizationCache.delete(key);
+        throw error;
+      });
+    visualizationCache.set(key, activeEntry);
+  } else if (entry.data) {
+    visualizationCache.delete(key);
+    visualizationCache.set(key, entry);
+  }
+
+  const acquiredEntry = entry;
+  acquiredEntry.subscribers += 1;
+  let released = false;
+  return {
+    promise: acquiredEntry.data ? Promise.resolve(acquiredEntry.data) : acquiredEntry.promise!,
+    release: () => {
+      if (released) return;
+      released = true;
+      acquiredEntry.subscribers = Math.max(0, acquiredEntry.subscribers - 1);
+      if (acquiredEntry.subscribers === 0 && acquiredEntry.promise) {
+        acquiredEntry.controller?.abort();
+        if (visualizationCache.get(key) === acquiredEntry) visualizationCache.delete(key);
+      }
+    },
+  };
+}
+
+function invalidateVisualization(runId: string, visualizationId: string): void {
+  const key = visualizationCacheKey(runId, visualizationId);
+  const entry = visualizationCache.get(key);
+  entry?.controller?.abort();
+  visualizationCache.delete(key);
+}
+
+function isAbortError(reason: unknown): boolean {
+  return reason instanceof Error && reason.name === "AbortError";
+}
+
 function metadataLabel(spec: VisualizationSpec): string {
   return [spec.source, spec.adjustment, spec.timeframe, spec.timezone].filter(Boolean).join(" · ");
 }
@@ -28,35 +110,57 @@ function formatPrice(value: number): string {
 function ChartPanel({ runId, spec }: ChartPanelProps) {
   const { t } = useTranslation();
   const titleId = useId();
+  const panelRef = useRef<HTMLElement>(null);
   const [data, setData] = useState<RunVisualization | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
+  const [shouldLoad, setShouldLoad] = useState(false);
+  const [reloadVersion, setReloadVersion] = useState(0);
 
-  const load = useCallback(async () => {
+  const load = useCallback(() => {
+    invalidateVisualization(runId, spec.data_ref);
+    setData(null);
     setLoading(true);
     setError(null);
-    try {
-      setData(await api.getRunVisualization(runId, spec.data_ref));
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setLoading(false);
-    }
+    setShouldLoad(true);
+    setReloadVersion((version) => version + 1);
   }, [runId, spec.data_ref]);
 
   useEffect(() => {
+    const element = panelRef.current;
+    if (!element || typeof IntersectionObserver === "undefined") {
+      setShouldLoad(true);
+      return undefined;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      setShouldLoad(true);
+      observer.disconnect();
+    }, { rootMargin: "400px 0px" });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [runId, spec.data_ref]);
+
+  useEffect(() => {
+    if (!shouldLoad) return undefined;
     let active = true;
     setLoading(true);
     setError(null);
-    api.getRunVisualization(runId, spec.data_ref)
+    const request = acquireVisualization(runId, spec.data_ref);
+    request.promise
       .then((result) => { if (active) setData(result); })
       .catch((reason: unknown) => {
-        if (active) setError(reason instanceof Error ? reason.message : String(reason));
+        if (active && !isAbortError(reason)) {
+          setError(reason instanceof Error ? reason.message : String(reason));
+        }
       })
       .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [runId, spec.data_ref]);
+    return () => {
+      active = false;
+      request.release();
+    };
+  }, [reloadVersion, runId, shouldLoad, spec.data_ref]);
 
   useEffect(() => {
     if (!expanded) return undefined;
@@ -120,7 +224,7 @@ function ChartPanel({ runId, spec }: ChartPanelProps) {
         <button
           type="button"
           className="inline-flex items-center gap-1 rounded-md border border-border/70 px-2 py-1 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
-          onClick={() => setExpanded(true)}
+          onClick={() => { setShouldLoad(true); setExpanded(true); }}
           aria-label={t("visualization.expand", { defaultValue: "Expand chart" })}
         >
           <Maximize2 className="h-3 w-3" />
@@ -168,7 +272,7 @@ function ChartPanel({ runId, spec }: ChartPanelProps) {
 
   return (
     <>
-      <section className="not-prose overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm">
+      <section ref={panelRef} className="not-prose overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm">
         {header()}
         {!expanded && content(340)}
       </section>
@@ -218,7 +322,7 @@ export function VisualizationRenderer({ runId, visualizations = [] }: RendererPr
         </div>
       )}
       <ChartPanel
-        key={supported[safeIndex].visualization_id}
+        key={`${runId}:${supported[safeIndex].visualization_id}`}
         runId={runId}
         spec={supported[safeIndex]}
       />

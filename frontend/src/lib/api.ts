@@ -94,9 +94,10 @@ export const api = {
   },
   getRunCode: (id: string) => request<Record<string, string>>(`/runs/${id}/code`),
   getRunPine: (id: string) => request<PineScriptResult>(`/runs/${id}/pine`),
-  getRunVisualization: (runId: string, visualizationId: string) =>
+  getRunVisualization: (runId: string, visualizationId: string, signal?: AbortSignal) =>
     request<RunVisualization>(
       `/runs/${encodeURIComponent(runId)}/visualizations/${encodeURIComponent(visualizationId)}`,
+      { signal },
     ),
   listSessions: () => request<SessionItem[]>("/sessions"),
   createSession: (title?: string) => request<SessionItem>("/sessions", { method: "POST", body: JSON.stringify({ title: title || "" }) }),
