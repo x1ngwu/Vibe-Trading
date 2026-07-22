@@ -6,7 +6,7 @@
 
 ## Status
 
-- Overall: **All required P0/P1 repair items complete; final real-data smoke tests and review remain**
+- Overall: **All required P0/P1 repair items complete; 6/7 live smoke paths pass, with the index path blocked by Yahoo HTTP 429**
 - Priority order: **P0 blockers first, then P1 correctness/performance**
 - Opened: 2026-07-21
 - Baseline commit: `d5f8297`
@@ -408,7 +408,9 @@ same component makes them effectively free to include.
 - [x] AgentLoop current-run injection test.
 - [x] Provider fallback and interval capability tests.
 - [x] Runtime registry smoke test.
-- [ ] Real-data smoke tests for A-share daily/minute, US daily/minute, index, and crypto.
+- [x] Real-data smoke tests for A-share daily/minute, US daily/minute, and crypto daily/minute.
+- [!] Real-data index smoke: `^GSPC` remains blocked because Yahoo and yfinance return HTTP 429
+  from the current egress IP, while the unauthenticated fallback providers return no index data.
 
 ### Frontend
 
@@ -496,13 +498,26 @@ Each batch must be reviewable and reversible without depending on unfinished lat
   locale-aware chart theme used by candlesticks and volume.
 - P1-07 focused frontend verification passed 3 files/12 tests; full Vitest passed 32 files/266
   tests, and the production TypeScript/Vite build passed.
+- Ran seven isolated real-data chart smoke paths against public read-only providers with artifacts
+  stored under auto-cleaned temporary run directories. A-share daily (Tencent, 36 bars), A-share
+  5-minute (Eastmoney, 240 bars), crypto daily (OKX, 50 bars), and crypto 5-minute (OKX, 576 bars)
+  passed directly; every payload was strictly ordered with no duplicate timestamps or dropped bars.
+- Yahoo returned HTTP 429 for AAPL and `^GSPC`. Automatic fallback recovered AAPL daily through
+  Sina (35 bars) and AAPL 5-minute through Eastmoney (312 bars), preserving structured source
+  attempts. The `^GSPC` index path remained unresolved after all compatible unauthenticated
+  fallbacks, so its live smoke is recorded as an external provider-cooldown blocker.
 
 ## Completion record
 
-Fill this section only after all required P0/P1 items are complete.
+All required P0/P1 implementation items are complete. The external live-index validation gap is
+retained explicitly rather than being treated as an implementation failure.
 
-- Completion date:
-- Final commit(s):
-- Tests executed:
-- Known residual risks:
-- Reviewer decision:
+- Completion date: 2026-07-22
+- Final implementation commits: `6172c16`, `e861d78`, `92f596e`, `4995aa7`, `851f60b`, `3dfb3ef`
+- Tests executed: backend 5,300 passed / 9 skipped; frontend 32 files / 266 tests passed;
+  TypeScript/Vite production build passed; six live provider paths passed
+- Known residual risks: `^GSPC` live validation requires a Yahoo rate-limit cooldown or an
+  authenticated index-capable provider; 14 pre-existing `.orig` backups remain untracked and
+  excluded; deferred accessibility and chunk-size items remain listed above
+- Reviewer decision: required chart repair is implementation-complete; retry the index smoke after
+  provider cooldown before treating the entire live-provider matrix as green
