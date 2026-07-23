@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0",
+  "object_type": "research_spec",
+  "object_id": "research_spec:2d9230b693c2b5f9be57ed6e2fd9ffc7ae87a6e301bad7ad53d026c0a57d786f",
+  "owner_scope": "household:v1",
+  "created_at": "2026-07-23T00:00:00Z",
+  "parent_refs": [],
+  "content_sha256": "2d9230b693c2b5f9be57ed6e2fd9ffc7ae87a6e301bad7ad53d026c0a57d786f",
+  "payload": {
+    "object_type": "research_spec",
+    "symbols": [
+      "600519.SH",
+      "000858.SZ"
+    ],
+    "as_of": "2025-06-30",
+    "lookback_days": [
+      60,
+      120,
+      252
+    ],
+    "candidate_universe": "csi300@2025-06-30",
+    "peer_dimensions": [
+      "industry",
+      "market_cap",
+      "liquidity",
+      "listing_age"
+    ],
+    "feature_channels": [
+      "business",
+      "factor",
+      "price_volume"
+    ],
+    "requested_outputs": [
+      "factor_evidence",
+      "similarity",
+      "report"
+    ]
+  }
+}
