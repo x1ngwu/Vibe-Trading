@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import selectors
 import shutil
@@ -22,6 +21,7 @@ from .protocol import (
     ProtocolError,
     build_request,
     canonical_json,
+    strict_json_loads,
     validate_request,
     validate_response,
 )
@@ -324,10 +324,10 @@ class WorkerRunner:
                     stderr=stderr_text,
                 )
             try:
-                decoded = json.loads(lines[0])
+                decoded = strict_json_loads(lines[0])
                 response = validate_response(decoded, request=request, expected_engine=self.config.engine)
-            except (json.JSONDecodeError, ProtocolError) as exc:
-                code = exc.code if isinstance(exc, ProtocolError) else "INVALID_RESPONSE"
+            except ProtocolError as exc:
+                code = "INVALID_RESPONSE" if exc.code == "INVALID_JSON" else exc.code
                 raise WorkerExecutionError(code, str(exc), stderr=stderr_text) from exc
             if response["status"] == "error":
                 error = response["error"]

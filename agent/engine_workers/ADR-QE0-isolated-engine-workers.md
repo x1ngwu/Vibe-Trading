@@ -1,6 +1,7 @@
 # ADR QE0：隔离量化引擎 worker 的 PoC 边界
 
-- 状态：协议与两平台 direct smoke 已通过；QE0 G1 仍被内核级隔离证据阻断
+- 状态：协议与两平台 direct smoke 已通过；post-commit review 的 CT-04、WK-02 和实际执行源码闭包
+  已修复并补齐负例，WK-01/SE-04 制品完整性、snapshot 内容绑定及内核隔离仍未关闭
 - 日期：2026-07-23 JST
 - Vibe 源码基线：`6bccd6974ad7d7a63318bce6c41f0064614404d4`
 - 源码分支：`agent/nlq-quant-engine-poc`
@@ -57,11 +58,16 @@ namespace：bubblewrap 分别失败于 `setting up uid map: Permission denied` �
 | `vnpy/requirements-lock.txt` | `540df31956cd6e5a2c154174a60d7585dfc0b41c3bda4d30f256a4922932632f` |
 
 各 worker 的 `NOTICE.md` 记录上游 URL、commit、版本、MIT 许可证和许可证原文链接；没有复制第三方
-源码到 Vibe。lock 是 QE0 的 Linux/Python 环境冻结，不修改主 lock。direct smoke 还会在执行前校验
-实际调用的 QUANTAXIS 7 个源文件和 vn.py 3 个源文件 SHA-256；精确哈希由自动测试固定，环境漂移以
-`ENGINE_PROVENANCE_MISMATCH` 失败。
+源码到 Vibe。lock 是 QE0 的 Linux/Python 环境冻结，不修改主 lock。capability 和 direct smoke 会先
+校验精确安装版本，再校验 QUANTAXIS 8 个实际加载源文件和 vn.py 7 个实际 import/执行文件的
+SHA-256；任一文件缺失、为 symlink 或内容漂移均以 `ENGINE_PROVENANCE_MISMATCH` 失败，缺包和错版
+分别以 `ENGINE_UNAVAILABLE`、`ENGINE_VERSION_MISMATCH` 失败，不再宣告可执行 operation。
 
-## 2026-07-22 测量
+post-commit 修复已纳入遗漏的 `QAUtil/QAParameter.py` 与 vn.py 4 个包初始化/导入文件，并逐一覆盖
+15 个受信文件的 tamper 负例。当前 lock 仍只固定版本/VCS commit，没有 wheel/sdist artifact hash；
+因此执行源码闭包已关闭，但 WK-01/SE-04 的依赖制品完整性仍为 partial。
+
+## 2026-07-22–23 测量
 
 测量主机：Linux x86_64，3.6 GiB RAM；环境位于 `/tmp`，缓存和下载体积不计入源码。
 数字是 PoC 观测值，不是性能 SLA；“冷启动”指新 worker 进程，不代表清空宿主页缓存。
@@ -87,14 +93,15 @@ adapter 语义。
 
 | ID | 状态 | 证据/缺口 |
 |---|---|---|
-| CT-04 | passed | 严格 schema/version/engine/hash/response binding 自动测试。 |
-| WK-01 | passed | 三套依赖分离；两个 commit、lock、NOTICE 固定；主 lock 未改。 |
-| WK-02 | passed | JSONL 污染、崩溃、非零退出、超大 stderr、非法/非有限 JSON 输出有稳定错误。截断由严格单行/JSON 校验覆盖。 |
+| CT-04 | passed | 两个引擎分别覆盖缺包、错误版本和 provenance 不符；校验失败时 capability 不宣告 operation。 |
+| WK-01 | partial | 三套依赖分离且固定版本/VCS commit；wheel/sdist 制品 hash 未固定。 |
+| WK-02 | passed | 严格响应解码及完整 response canonical 校验拒绝 result/error 中的 `NaN`、`Infinity`、`-Infinity`。 |
 | WK-04 | passed | timeout、cancel 和含子进程的进程组清理自动测试。 |
 | WK-05 | partial | 越界、symlink、FIFO 被拒；只读挂载因 namespace 权限尚未验证。 |
 | WK-06 | partial | 秘密清除、动态加载路径清除、时区/locale/seed/thread、connect/DNS/bind/UDP guard 通过；内核级断网未验证。 |
 | SE-02 | passed（PoC 范围） | 测试环境不继承命名秘密；stderr 有界；仍需合并前执行仓库秘密扫描。 |
-| SE-04 | passed | NOTICE、commit、lock 和源码路径可追溯。 |
+| SE-04 | partial | QUANTAXIS 8 文件、vn.py 7 文件执行源码闭包及逐文件 tamper 已通过；依赖制品 artifact hash 尚未固定。 |
+| snapshot 内容绑定 | open（QE1/QE2 前置） | `snapshot_sha256` 只校验格式，尚未与文件或 manifest 内容比对。 |
 | PR-01 | passed（PoC 范围） | 两平台启动、RSS、磁盘增量和全新 lock 安装耗时已记录。 |
 | 两平台 direct smoke | passed | QUANTAXIS 叶子模块 qfq/hfq、日历、MA2、QIFI 离线成交和 vn.py EventEngine 均通过，重复运行核心结果一致。 |
 
@@ -109,15 +116,20 @@ VIBE_QE0_VNPY_PYTHON=/path/to/vnpy-venv/bin/python \
   agent/tests/test_quant_engine_direct_smoke.py
 ```
 
-加固后定向结果：`24 passed in 4.56s`。
+post-commit 修复后的定向结果：`53 passed in 3.84s`，使用现有两个隔离解释器完成真实 capability 与
+两平台 direct smoke，并覆盖缺包、错版、15 个受信文件逐一篡改及 response result/error 的
+`NaN`/`Infinity`/`-Infinity`。修复前的 `24 passed in 4.56s` 仅保留为历史基线。
 
-完整后端回归已执行：除实时 Tushare E2E 外为 `5324 passed, 5 skipped`；4 个实时用例仅因本机
-`.env` 中的 Tushare token 无效而失败，显式使用仓库约定占位值后为 `4 skipped`。该外部凭据
-问题与 QE0 代码无关，但未伪记为通过。
+post-commit 完整后端回归以仓库约定占位值显式跳过实时 Tushare E2E：`5352 passed, 11 skipped,
+20 warnings in 174.46s`。skip 均来自实时凭据或环境/门禁条件；warnings 为既有 FastAPI/Starlette
+弃用和 pandas `pct_change` future warning，本轮未新增测试失败。
 
 ## 后续决策门槛
 
-QE0 不接生产。进入 QE1 前仍需在具备 user/network namespace 或等价容器/seccomp 的执行环境验证
-内核级断网、只读 snapshot bind mount 和特殊文件边界。QUANTAXIS
-叶子模块实验已证明技术可行，但 qfq/hfq、因子和 QIFI 账户仍按 `port/对照候选` 处理；QE2 必须用
-固定 fixture、公式和真实公司行动窗口验证，不能直接称为正式 adopt。
+QE0 不接生产。CT-04 capability fail-closed、WK-02 严格响应 JSON 和实际执行源码闭包已关闭；进入
+QE1 前仍须确定 WK-01/SE-04 依赖制品完整性与 snapshot digest 契约，并在具备 user/network namespace
+或等价容器/seccomp 的执行环境验证内核级断网、只读 snapshot bind mount 和特殊文件边界。任一剩余项
+未关闭时 QE0 G1 保持打开。
+
+QUANTAXIS 叶子模块实验已证明技术可行，但 qfq/hfq、因子和 QIFI 账户仍按 `port/对照候选` 处理；
+QE2 必须用固定 fixture、公式和真实公司行动窗口验证，不能直接称为正式 adopt。

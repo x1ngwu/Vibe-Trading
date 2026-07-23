@@ -12,6 +12,7 @@ from .protocol import (
     ProtocolError,
     build_request,
     canonical_json,
+    strict_json_loads,
     validate_request,
     validate_response,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "WorkerRunner",
     "build_request",
     "canonical_json",
+    "strict_json_loads",
     "validate_request",
     "validate_response",
 ]

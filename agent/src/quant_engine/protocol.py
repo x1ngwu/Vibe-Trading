@@ -82,6 +82,23 @@ def canonical_json(value: Any) -> str:
         raise ProtocolError("INVALID_JSON_VALUE", str(exc)) from exc
 
 
+def strict_json_loads(value: str | bytes | bytearray) -> Any:
+    """Decode JSON while rejecting Python's non-standard NaN/Infinity extension."""
+
+    def reject_constant(constant: str) -> None:
+        raise ProtocolError(
+            "INVALID_JSON_VALUE",
+            f"non-finite JSON constant is not allowed: {constant}",
+        )
+
+    try:
+        return json.loads(value, parse_constant=reject_constant)
+    except ProtocolError:
+        raise
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ProtocolError("INVALID_JSON", str(exc)) from exc
+
+
 def content_sha256(value: Mapping[str, Any]) -> str:
     """Hash a request-like mapping without its self-referential hash field."""
 
@@ -218,6 +235,7 @@ def validate_response(
 
     if not isinstance(value, Mapping):
         raise ProtocolError("INVALID_RESPONSE", "response must be an object")
+    canonical_json(value)
     _require_exact_keys(value, _RESPONSE_KEYS, "response")
     if value.get("protocol") != PROTOCOL_NAME or value.get("schema_version") != SCHEMA_VERSION:
         raise ProtocolError("PROTOCOL_MISMATCH", "worker returned unsupported protocol or schema")

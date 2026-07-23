@@ -11,6 +11,7 @@ from src.quant_engine.protocol import (
     ProtocolError,
     build_request,
     canonical_json,
+    strict_json_loads,
     validate_request,
     validate_response,
 )
@@ -105,4 +106,39 @@ def test_response_must_bind_to_exact_request_and_engine() -> None:
 def test_non_finite_json_is_rejected(value: float) -> None:
     with pytest.raises(ProtocolError) as raised:
         canonical_json({"value": value})
+    assert raised.value.code == "INVALID_JSON_VALUE"
+
+
+@pytest.mark.parametrize("token", ["NaN", "Infinity", "-Infinity"])
+def test_strict_decoder_rejects_non_finite_response_json(token: str) -> None:
+    with pytest.raises(ProtocolError) as raised:
+        strict_json_loads(f'{{"result":{{"value":{token}}}}}')
+
+    assert raised.value.code == "INVALID_JSON_VALUE"
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("location", ["result", "error"])
+def test_response_rejects_non_finite_values_anywhere(value: float, location: str) -> None:
+    request = _request()
+    response = {
+        "protocol": "vibe.quant-engine.jsonl",
+        "schema_version": "1.0",
+        "request_id": request["request_id"],
+        "engine": ENGINE.as_dict(),
+        "request_sha256": request["content_sha256"],
+        "status": "ok",
+        "result": {"value": value},
+        "error": None,
+    }
+    if location == "error":
+        response.update(
+            status="error",
+            result=None,
+            error={"code": "NON_FINITE", "message": value},
+        )
+
+    with pytest.raises(ProtocolError) as raised:
+        validate_response(response, request=request, expected_engine=ENGINE)
+
     assert raised.value.code == "INVALID_JSON_VALUE"

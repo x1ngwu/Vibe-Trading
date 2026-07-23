@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import hashlib
-from importlib.metadata import distribution
+from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 from threading import Event as ThreadEvent
 import sys
@@ -17,42 +17,78 @@ from worker_runtime import WorkerError, run_worker  # noqa: E402
 
 ENGINE_NAME = "vnpy"
 ENGINE_COMMIT = "1b78494979deb4c4996f6b864f234d9839f2f239"
+EXPECTED_ENGINE_VERSION = "4.4.0"
 EXPECTED_SOURCE_SHA256 = {
+    "package_init": "ba16287a3acd984a6e68c3e373441c7e8af623ad9df74837227368a4456915a8",
+    "event_init": "81752eb9db5a9e9bdf7024f9a8821cf569c5994eceff9194a6ecd725dc8ed365",
     "event_engine": "079c76f3c99ed4dc1e28dd0ba9a30991f41bfd613c9ab30b1fa0ea6f1da6b76b",
+    "trader_init": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "trader_locale_init": "3138d59a9d7bf99cdcc683778e402f0dd7fabcf9698c3ec2820e44508ac0661c",
     "trader_object": "bd360fc224ce22a3f7521bef67ea61125d43c410fa880b9667030ee254546a69",
     "trader_constant": "1361eb485eda9fd97bee3e68324d9b08a96fe927c37a99f8b74de981141e7a0f",
 }
 
 
-def _verify_source() -> dict[str, str]:
-    root = Path(distribution("vnpy").locate_file("vnpy")).resolve(strict=True)
-    files = {
-        "event_engine": root / "event" / "engine.py",
-        "trader_object": root / "trader" / "object.py",
-        "trader_constant": root / "trader" / "constant.py",
-    }
-    actual = {
-        name: hashlib.sha256(path.read_bytes()).hexdigest()
-        for name, path in files.items()
-    }
+SOURCE_RELATIVE_PATHS = {
+    "package_init": ("__init__.py",),
+    "event_init": ("event", "__init__.py"),
+    "event_engine": ("event", "engine.py"),
+    "trader_init": ("trader", "__init__.py"),
+    "trader_locale_init": ("trader", "locale", "__init__.py"),
+    "trader_object": ("trader", "object.py"),
+    "trader_constant": ("trader", "constant.py"),
+}
+
+
+def _verify_installation() -> tuple[str, dict[str, str]]:
+    """Require the exact package version and every imported upstream source file."""
+
+    try:
+        dist = distribution("vnpy")
+    except PackageNotFoundError as exc:
+        raise WorkerError(
+            "ENGINE_UNAVAILABLE",
+            "the pinned vn.py distribution is not installed",
+        ) from exc
+
+    installed_version = dist.version
+    if installed_version != EXPECTED_ENGINE_VERSION:
+        raise WorkerError(
+            "ENGINE_VERSION_MISMATCH",
+            f"expected vn.py {EXPECTED_ENGINE_VERSION}, got {installed_version}",
+        )
+
+    try:
+        root = Path(dist.locate_file("vnpy")).resolve(strict=True)
+        files = {
+            name: root.joinpath(*relative)
+            for name, relative in SOURCE_RELATIVE_PATHS.items()
+        }
+        if any(path.is_symlink() or not path.is_file() for path in files.values()):
+            raise OSError("audited source is missing or is a symlink")
+        actual = {
+            name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for name, path in files.items()
+        }
+    except OSError as exc:
+        raise WorkerError(
+            "ENGINE_PROVENANCE_MISMATCH",
+            "installed vn.py source closure is incomplete",
+        ) from exc
     if actual != EXPECTED_SOURCE_SHA256:
         raise WorkerError(
             "ENGINE_PROVENANCE_MISMATCH",
             "installed vn.py source does not match the audited commit",
         )
-    return actual
+    return installed_version, actual
 
 
 def capabilities(payload: Mapping[str, Any], snapshot: Mapping[str, Any] | None) -> Mapping[str, Any]:
-    try:
-        from importlib.metadata import version
-
-        installed_version = version("vnpy")
-    except Exception:
-        installed_version = None
+    installed_version, source_sha256 = _verify_installation()
     return {
         "engine_version": installed_version,
         "engine_commit": ENGINE_COMMIT,
+        "source_sha256": source_sha256,
         "operations": {
             "capabilities": "poc",
             "security_probe": "poc",
@@ -66,11 +102,13 @@ def capabilities(payload: Mapping[str, Any], snapshot: Mapping[str, Any] | None)
 
 def direct_smoke(payload: Mapping[str, Any], snapshot: Mapping[str, Any] | None) -> Mapping[str, Any]:
     try:
-        source_sha256 = _verify_source()
+        _, source_sha256 = _verify_installation()
         import vnpy
         from vnpy.event import Event, EventEngine
         from vnpy.trader.constant import Direction, Exchange, Status
         from vnpy.trader.object import OrderData, TradeData
+    except WorkerError:
+        raise
     except Exception as exc:
         raise WorkerError("ENGINE_IMPORT_ERROR", f"{type(exc).__name__}: {exc}") from exc
 

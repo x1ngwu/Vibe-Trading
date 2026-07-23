@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
-from importlib.metadata import distribution, version
+from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 import sys
 from types import ModuleType
@@ -17,6 +17,7 @@ from worker_runtime import WorkerError, run_worker  # noqa: E402
 
 ENGINE_NAME = "quantaxis"
 ENGINE_COMMIT = "a69e978a2e38d045a64c380cc3b5c9fa08fa4903"
+EXPECTED_ENGINE_VERSION = "2.1.0a2"
 EXPECTED_SOURCE_SHA256 = {
     "data_fq": "8ea6b152a4eff20bffba2216ae8dc88edbb3f0f11b0a220abb19c574cf459eff",
     "indicator_base": "fbbb3debfa0d061eb4d6e56acf783dea18a144f56ffc191769df075cf38c4737",
@@ -25,7 +26,19 @@ EXPECTED_SOURCE_SHA256 = {
     "market_preset": "d789ed62fd173ce2102f87c22ec6e7c155f6c07180e383ff49965fbed70bf8fd",
     "position": "531b691e8a8791cf1a5e9136a980f5a6972e2e4f6fd78df994766213f80dda55",
     "qifi_account": "8b1cae0450d7c3cf9fb4f112191724096f09c84fd6d9c11662d2f13020166a9d",
+    "parameters": "dfb09865c6d6016cfea5c2a6009b09353fbe6aa5416a2df53ede82d2ca8ab773",
 }
+SOURCE_RELATIVE_PATHS = {
+    "data_fq": ("QAData", "data_fq.py"),
+    "indicator_base": ("QAIndicator", "base.py"),
+    "indicators": ("QAIndicator", "indicators.py"),
+    "calendar": ("QAUtil", "QADate_trade.py"),
+    "market_preset": ("QAMarket", "market_preset.py"),
+    "position": ("QAMarket", "QAPosition.py"),
+    "qifi_account": ("QIFI", "QifiAccount.py"),
+    "parameters": ("QAUtil", "QAParameter.py"),
+}
+
 
 def _namespace(name: str, path: Path) -> ModuleType:
     """Install a namespace shell without executing QUANTAXIS package initializers."""
@@ -58,6 +71,55 @@ def _load_source(name: str, path: Path) -> ModuleType:
     return module
 
 
+def _source_files(root: Path) -> dict[str, Path]:
+    return {
+        name: root.joinpath(*relative)
+        for name, relative in SOURCE_RELATIVE_PATHS.items()
+    }
+
+
+def _verify_installation() -> tuple[Path, str, dict[str, str]]:
+    """Require the exact package version and every audited executable source file."""
+
+    try:
+        dist = distribution("quantaxis")
+    except PackageNotFoundError as exc:
+        raise WorkerError(
+            "ENGINE_UNAVAILABLE",
+            "the pinned QUANTAXIS distribution is not installed",
+        ) from exc
+
+    installed_version = dist.version
+    if installed_version != EXPECTED_ENGINE_VERSION:
+        raise WorkerError(
+            "ENGINE_VERSION_MISMATCH",
+            f"expected QUANTAXIS {EXPECTED_ENGINE_VERSION}, got {installed_version}",
+        )
+
+    try:
+        root = Path(dist.locate_file("QUANTAXIS")).resolve(strict=True)
+        if not (root / "__init__.py").is_file():
+            raise OSError("invalid package root")
+        source_files = _source_files(root)
+        if any(path.is_symlink() or not path.is_file() for path in source_files.values()):
+            raise OSError("audited source is missing or is a symlink")
+        actual = {
+            name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for name, path in source_files.items()
+        }
+    except OSError as exc:
+        raise WorkerError(
+            "ENGINE_PROVENANCE_MISMATCH",
+            "installed QUANTAXIS source closure is incomplete",
+        ) from exc
+    if actual != EXPECTED_SOURCE_SHA256:
+        raise WorkerError(
+            "ENGINE_PROVENANCE_MISMATCH",
+            "installed QUANTAXIS source does not match the audited commit",
+        )
+    return root, installed_version, actual
+
+
 def _load_quantaxis_boundary() -> dict[str, Any]:
     """Load the smallest useful QUANTAXIS leaves from the pinned distribution.
 
@@ -66,29 +128,7 @@ def _load_quantaxis_boundary() -> dict[str, Any]:
     source-module boundary. No upstream source is copied or changed.
     """
 
-    dist = distribution("quantaxis")
-    root = Path(dist.locate_file("QUANTAXIS")).resolve(strict=True)
-    if not (root / "__init__.py").is_file():
-        raise WorkerError("ENGINE_IMPORT_ERROR", "installed QUANTAXIS package root is invalid")
-
-    source_files = {
-        "data_fq": root / "QAData" / "data_fq.py",
-        "indicator_base": root / "QAIndicator" / "base.py",
-        "indicators": root / "QAIndicator" / "indicators.py",
-        "calendar": root / "QAUtil" / "QADate_trade.py",
-        "market_preset": root / "QAMarket" / "market_preset.py",
-        "position": root / "QAMarket" / "QAPosition.py",
-        "qifi_account": root / "QIFI" / "QifiAccount.py",
-    }
-    source_sha256 = {
-        name: hashlib.sha256(path.read_bytes()).hexdigest()
-        for name, path in source_files.items()
-    }
-    if source_sha256 != EXPECTED_SOURCE_SHA256:
-        raise WorkerError(
-            "ENGINE_PROVENANCE_MISMATCH",
-            "installed QUANTAXIS source does not match the audited commit",
-        )
+    root, installed_version, source_sha256 = _verify_installation()
 
     for name, relative in (
         ("QUANTAXIS", "."),
@@ -143,7 +183,7 @@ def _load_quantaxis_boundary() -> dict[str, Any]:
     qifi = _load_source("QUANTAXIS.QIFI.QifiAccount", root / "QIFI" / "QifiAccount.py")
 
     return {
-        "version": version("quantaxis"),
+        "version": installed_version,
         "data_fq": data_fq,
         "indicators": indicators,
         "indicator_base": indicator_base,
@@ -158,13 +198,11 @@ def _load_quantaxis_boundary() -> dict[str, Any]:
 
 
 def capabilities(payload: Mapping[str, Any], snapshot: Mapping[str, Any] | None) -> Mapping[str, Any]:
-    try:
-        installed_version = version("quantaxis")
-    except Exception:
-        installed_version = None
+    _, installed_version, source_sha256 = _verify_installation()
     return {
         "engine_version": installed_version,
         "engine_commit": ENGINE_COMMIT,
+        "source_sha256": source_sha256,
         "operations": {
             "capabilities": "poc",
             "security_probe": "poc",
@@ -183,6 +221,8 @@ def direct_smoke(payload: Mapping[str, Any], snapshot: Mapping[str, Any] | None)
     try:
         import pandas as pd
         boundary = _load_quantaxis_boundary()
+    except WorkerError:
+        raise
     except Exception as exc:
         raise WorkerError("ENGINE_IMPORT_ERROR", f"{type(exc).__name__}: {exc}") from exc
 

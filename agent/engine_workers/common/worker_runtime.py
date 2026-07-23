@@ -66,6 +66,21 @@ def canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":"))
 
 
+def _strict_json_loads(value: str | bytes | bytearray) -> Any:
+    def reject_constant(constant: str) -> None:
+        raise WorkerError(
+            "INVALID_JSON_VALUE",
+            f"non-finite JSON constant is not allowed: {constant}",
+        )
+
+    try:
+        return json.loads(value, parse_constant=reject_constant)
+    except WorkerError:
+        raise
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise WorkerError("INVALID_JSON", str(exc)) from exc
+
+
 def _content_sha256(value: Mapping[str, Any]) -> str:
     unhashed = dict(value)
     unhashed.pop("content_sha256", None)
@@ -293,7 +308,7 @@ def run_worker(
         _install_network_guard()
         if len(raw) > MAX_REQUEST_BYTES or trailing or not raw.endswith(b"\n"):
             raise WorkerError("INVALID_SCHEMA", "stdin must contain exactly one bounded JSON line")
-        request = json.loads(raw)
+        request = _strict_json_loads(raw)
         request = _validate_request(request, engine_name=engine_name, engine_commit=engine_commit)
         operation = request["operation"]
         if operation == "security_probe":
