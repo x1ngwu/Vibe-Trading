@@ -11,12 +11,55 @@ import pandas as pd
 
 from backtest.loaders._symbol_utils import _is_etf_listed
 from backtest.loaders.base import cached_loader_fetch, validate_date_range
+from backtest.loaders.data_envelope import LoaderCapability
 from backtest.loaders.registry import register
 
 logger = logging.getLogger(__name__)
 
 
 TUSHARE_TOKEN_PLACEHOLDERS = {"", "your-tushare-token"}
+
+# QE2 capability is intentionally narrower than the legacy loader: it declares
+# only A-share daily raw semantics that have explicit official units.  Tushare
+# daily/fund_daily/index_daily all document ``vol`` as lots (手) and ``amount``
+# as CNY thousands.  Sources:
+# https://tushare.pro/document/1?doc_id=27
+# https://tushare.pro/document/2?doc_id=127
+# https://tushare.pro/document/1?doc_id=95
+QE2_DAILY_CAPABILITY = LoaderCapability(
+    source="tushare",
+    version="tushare-a-share-daily-raw-v1",
+    instrument_types=("stock", "etf", "index"),
+    intervals=("1D",),
+    adjustments=("raw",),
+    fields=("open", "high", "low", "close", "volume", "amount"),
+    field_units={
+        "stock": {
+            "open": "CNY/share",
+            "high": "CNY/share",
+            "low": "CNY/share",
+            "close": "CNY/share",
+            "volume": "lot_100_shares",
+            "amount": "CNY_1000",
+        },
+        "etf": {
+            "open": "CNY/share",
+            "high": "CNY/share",
+            "low": "CNY/share",
+            "close": "CNY/share",
+            "volume": "lot_100_shares",
+            "amount": "CNY_1000",
+        },
+        "index": {
+            "open": "index_point",
+            "high": "index_point",
+            "low": "index_point",
+            "close": "index_point",
+            "volume": "lot_100_shares",
+            "amount": "CNY_1000",
+        },
+    },
+)
 
 
 def _is_index(code: str) -> bool:
@@ -163,10 +206,13 @@ class DataLoader:
         df["trade_date"] = pd.to_datetime(df["trade_date"])
         df = df.set_index("trade_date")
         df = df.rename(columns={"vol": "volume"})
-        for col in ["open", "high", "low", "close", "volume"]:
+        for col in ["open", "high", "low", "close", "volume", "amount"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
-        ohlcv = df[["open", "high", "low", "close", "volume"]].dropna(
+        output_columns = ["open", "high", "low", "close", "volume"]
+        if "amount" in df.columns:
+            output_columns.append("amount")
+        ohlcv = df[output_columns].dropna(
             subset=["open", "high", "low", "close"]
         )
         return ohlcv

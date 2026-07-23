@@ -15,6 +15,7 @@ import pytest
 
 from backtest.loaders.tushare import (
     DataLoader,
+    QE2_DAILY_CAPABILITY,
     _is_crypto,
     _is_etf_listed,
     _is_hk_equity,
@@ -153,6 +154,7 @@ class TestFetchDailyFrameRouting:
         loader.api.hk_daily.assert_not_called()
         assert result is not None
         assert not result.empty
+        assert list(result.columns) == ["open", "high", "low", "close", "volume", "amount"]
 
     def test_etf_routes_to_fund_daily(self) -> None:
         loader = self._make_loader()
@@ -196,6 +198,24 @@ class TestFetchDailyFrameRouting:
         loader.api.daily.return_value = pd.DataFrame()
         result = loader._fetch_daily_frame("600519.SH", "20250102", "20250110")
         assert result is None
+
+
+def test_qe2_tushare_capability_is_raw_only_and_preserves_official_units() -> None:
+    stock_units = QE2_DAILY_CAPABILITY.field_units["stock"]
+    index_units = QE2_DAILY_CAPABILITY.field_units["index"]
+
+    assert QE2_DAILY_CAPABILITY.adjustments == ("raw",)
+    assert QE2_DAILY_CAPABILITY.fields == (
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "amount",
+    )
+    assert stock_units["volume"] == "lot_100_shares"
+    assert stock_units["amount"] == "CNY_1000"
+    assert index_units["close"] == "index_point"
 
 
 # ---------------------------------------------------------------------------
