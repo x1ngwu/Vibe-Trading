@@ -186,6 +186,76 @@ class ResearchStore:
                 connection.commit()
             return len(objects)
 
+    def backup_to(self, destination: Path) -> int:
+        """Create an isolated online backup using immutable JSON plus SQLite backup API.
+
+        The destination must be empty and outside the live store.  Object JSON
+        remains the source of truth; after the SQLite online backup completes,
+        the copied index is rebuilt from those validated objects so a source
+        index interrupted by an earlier crash cannot make the backup incomplete.
+        """
+
+        destination = Path(destination)
+        if destination.is_symlink():
+            raise StoreIntegrityError("backup destination must not be a symlink")
+        source_resolved = self.root.resolve()
+        destination_resolved = destination.resolve(strict=False)
+        if (
+            destination_resolved == source_resolved
+            or source_resolved in destination_resolved.parents
+            or destination_resolved in source_resolved.parents
+        ):
+            raise StoreIntegrityError("backup destination must be outside the live store")
+        if destination.exists():
+            if not destination.is_dir():
+                raise StoreIntegrityError("backup destination must be a directory")
+            if any(destination.iterdir()):
+                raise StoreIntegrityError("backup destination must be empty")
+        else:
+            destination.mkdir(parents=True, mode=0o700)
+
+        copied = 0
+        with self._exclusive_lock():
+            for source_path in self._iter_object_paths():
+                loaded = self._load_path(source_path)
+                expected = self._object_path(loaded.object_type, loaded.content_sha256)
+                if source_path != expected:
+                    raise StoreIntegrityError(
+                        f"object is stored at a non-canonical path: {source_path}"
+                    )
+                relative_path = source_path.relative_to(self.root)
+                encoded = (canonical_json(loaded) + "\n").encode("utf-8")
+                backup_object_path = destination / relative_path
+                backup_object_path.parent.mkdir(parents=True, exist_ok=True)
+                self._atomic_write(backup_object_path, encoded)
+                copied += 1
+
+            backup_database = destination / self.database_path.name
+            with self._connect() as source_connection:
+                with sqlite3.connect(backup_database) as backup_connection:
+                    source_connection.backup(backup_connection)
+                    backup_connection.commit()
+            database_descriptor = os.open(backup_database, os.O_RDONLY)
+            try:
+                os.fsync(database_descriptor)
+            finally:
+                os.close(database_descriptor)
+            directory_descriptor = os.open(destination, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+
+        restored = ResearchStore(
+            destination,
+            total_quota_bytes=self.total_quota_bytes,
+            max_object_bytes=self.max_object_bytes,
+        )
+        rebuilt = restored.rebuild_index()
+        if rebuilt != copied:
+            raise StoreIntegrityError("backup index rebuild did not preserve every object")
+        return copied
+
     def _prepare_root(self) -> None:
         if self.root.is_symlink():
             raise StoreIntegrityError("research store root must not be a symlink")

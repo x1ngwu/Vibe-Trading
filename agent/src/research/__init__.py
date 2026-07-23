@@ -37,6 +37,25 @@ from .store import (
     ResearchStoreError,
     StoreIntegrityError,
 )
+from .graph import ResearchGraphError, validate_research_chain
+from .migrations import MigrationError, MigrationResult, migrate_research_object
+from .market_fixture import (
+    MARKET_FIXTURE_SCHEMA,
+    MarketFixture,
+    MarketFixtureError,
+    RawBar,
+    load_market_fixture,
+    normalize_raw_bars,
+    point_in_time_value,
+)
+from .golden_ledger import (
+    GOLDEN_LEDGER_SCHEMA,
+    GoldenLedger,
+    GoldenLedgerError,
+    LedgerRules,
+    LedgerStep,
+    load_golden_ledger,
+)
 
 __all__ = [
     "BacktestMetrics",
@@ -51,6 +70,16 @@ __all__ = [
     "ExecutionSpec",
     "FactorEvidence",
     "FactorObservation",
+    "GOLDEN_LEDGER_SCHEMA",
+    "GoldenLedger",
+    "GoldenLedgerError",
+    "LedgerRules",
+    "LedgerStep",
+    "MigrationError",
+    "MigrationResult",
+    "MARKET_FIXTURE_SCHEMA",
+    "MarketFixture",
+    "MarketFixtureError",
     "ObjectRef",
     "PeerSet",
     "PortfolioSpec",
@@ -59,9 +88,11 @@ __all__ = [
     "RankingSpec",
     "ResearchObject",
     "ResearchReport",
+    "ResearchGraphError",
     "ResearchSpec",
     "ResearchStore",
     "ResearchStoreError",
+    "RawBar",
     "ResourceLimits",
     "RiskSpec",
     "SignalRule",
@@ -72,4 +103,10 @@ __all__ = [
     "canonical_json",
     "canonical_sha256",
     "create_research_object",
+    "migrate_research_object",
+    "load_market_fixture",
+    "load_golden_ledger",
+    "normalize_raw_bars",
+    "point_in_time_value",
+    "validate_research_chain",
 ]

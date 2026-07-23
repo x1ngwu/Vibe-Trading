@@ -237,3 +237,62 @@ def test_ps03_total_quota_rejects_new_write_without_deleting_history(tmp_path: P
     assert store.get(first.object_id) == first
     assert store.get(second.object_id) is None
     assert store.quota_usage_bytes() == first_size
+
+
+def test_ps03_online_backup_restores_in_isolation_and_rebuilds_index(tmp_path: Path) -> None:
+    live = ResearchStore(tmp_path / "live" / "research")
+    parent = _research_object()
+    child = _snapshot_object(parent)
+    live.put(parent)
+    live.put(child)
+
+    backup_root = tmp_path / "isolated-restore" / "research"
+    assert live.backup_to(backup_root) == 2
+
+    restored = ResearchStore(backup_root)
+    assert restored.get(parent.object_id) == parent
+    assert restored.get(child.object_id) == child
+
+    with sqlite3.connect(restored.database_path) as connection:
+        connection.execute("DELETE FROM parents")
+        connection.execute("DELETE FROM objects")
+        connection.commit()
+    assert restored.list_refs() == ()
+    assert restored.rebuild_index() == 2
+    assert {ref.object_id for ref in restored.list_refs()} == {
+        parent.object_id,
+        child.object_id,
+    }
+
+
+def test_ps03_backup_rejects_nested_symlink_and_nonempty_destinations(tmp_path: Path) -> None:
+    store = ResearchStore(tmp_path / "live" / "research")
+    store.put(_research_object())
+
+    with pytest.raises(StoreIntegrityError, match="outside the live store"):
+        store.backup_to(store.root / "backup")
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    symlink = tmp_path / "backup-link"
+    symlink.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(StoreIntegrityError, match="must not be a symlink"):
+        store.backup_to(symlink)
+
+    nonempty = tmp_path / "nonempty"
+    nonempty.mkdir()
+    (nonempty / "keep.txt").write_text("keep", encoding="utf-8")
+    with pytest.raises(StoreIntegrityError, match="must be empty"):
+        store.backup_to(nonempty)
+    assert (nonempty / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_ps03_default_store_path_is_under_the_backed_up_vibe_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    store = ResearchStore.default()
+
+    assert store.root == tmp_path / "home" / ".vibe-trading" / "research"

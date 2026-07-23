@@ -1,0 +1,181 @@
+{
+  "schema_version": "vibe.market-fixture.v1",
+  "fixture_id": "qe1-cn-small-market-v1",
+  "as_of": "2025-01-10",
+  "currency": "CNY",
+  "source": "synthetic-offline-fixture",
+  "adjustment_rules": {
+    "raw_price": "unadjusted_exchange_price",
+    "qfq_anchor": "last_close_equals_raw",
+    "hfq_anchor": "first_close_equals_raw",
+    "cumulative_factor": "product_of_single_event_factors",
+    "single_event_factor": "post_event_theoretical_price/pre_event_close",
+    "price": "multiply_by_relative_cumulative_factor",
+    "volume": "divide_by_share_multiplier_only",
+    "amount": "never_adjust",
+    "shares": "multiply_by_share_multiplier"
+  },
+  "instruments": [
+    {
+      "symbol": "600001.SH",
+      "instrument_type": "stock",
+      "board": "sh_main",
+      "listing_date": "2000-01-01",
+      "delisting_date": null,
+      "scenarios": ["ordinary", "synthetic_near"]
+    },
+    {
+      "symbol": "600002.SH",
+      "instrument_type": "stock",
+      "board": "sh_main",
+      "listing_date": "2001-01-01",
+      "delisting_date": null,
+      "scenarios": ["cash_dividend", "duplicate_same", "synthetic_reverse"]
+    },
+    {
+      "symbol": "000003.SZ",
+      "instrument_type": "stock",
+      "board": "sz_main",
+      "listing_date": "2025-01-03",
+      "delisting_date": null,
+      "scenarios": ["share_change", "listing_boundary"]
+    },
+    {
+      "symbol": "600004.SH",
+      "instrument_type": "stock",
+      "board": "sh_main",
+      "listing_date": "1999-01-01",
+      "delisting_date": "2025-01-09",
+      "scenarios": ["rights_event", "delisting_boundary"]
+    },
+    {
+      "symbol": "600005.SH",
+      "instrument_type": "stock",
+      "board": "sh_main",
+      "listing_date": "2002-01-01",
+      "delisting_date": null,
+      "scenarios": ["suspension", "st", "limit_down_locked"]
+    },
+    {
+      "symbol": "600006.SH",
+      "instrument_type": "stock",
+      "board": "sh_main",
+      "listing_date": "2003-01-01",
+      "delisting_date": null,
+      "scenarios": ["true_missing", "duplicate_conflict", "missing_feature"]
+    },
+    {
+      "symbol": "300007.SZ",
+      "instrument_type": "stock",
+      "board": "chinext",
+      "listing_date": "2020-08-24",
+      "delisting_date": null,
+      "scenarios": ["limit_up_locked", "capacity_shortfall"]
+    },
+    {
+      "symbol": "688008.SH",
+      "instrument_type": "stock",
+      "board": "star",
+      "listing_date": "2020-01-02",
+      "delisting_date": null,
+      "scenarios": ["extreme_outlier"]
+    },
+    {
+      "symbol": "510300.SH",
+      "instrument_type": "etf",
+      "board": "etf",
+      "listing_date": "2012-05-28",
+      "delisting_date": null,
+      "scenarios": []
+    },
+    {
+      "symbol": "000300.SH",
+      "instrument_type": "index",
+      "board": "index",
+      "listing_date": "2005-04-08",
+      "delisting_date": null,
+      "scenarios": []
+    }
+  ],
+  "calendar": [
+    {"trade_date": "2025-01-01", "is_open": false, "reason": "holiday"},
+    {"trade_date": "2025-01-02", "is_open": true, "reason": "trading_day"},
+    {"trade_date": "2025-01-03", "is_open": true, "reason": "trading_day"},
+    {"trade_date": "2025-01-04", "is_open": false, "reason": "weekend"},
+    {"trade_date": "2025-01-05", "is_open": false, "reason": "weekend"},
+    {"trade_date": "2025-01-06", "is_open": true, "reason": "trading_day"},
+    {"trade_date": "2025-01-07", "is_open": true, "reason": "trading_day"},
+    {"trade_date": "2025-01-08", "is_open": true, "reason": "trading_day"},
+    {"trade_date": "2025-01-09", "is_open": true, "reason": "trading_day"},
+    {"trade_date": "2025-01-10", "is_open": true, "reason": "trading_day"}
+  ],
+  "raw_bars": [
+    {"source_row_id": "r001", "symbol": "600001.SH", "trade_date": "2025-01-02", "open": 10.00, "high": 10.30, "low": 9.90, "close": 10.20, "volume": 100000, "amount": 1015000.00, "status": "traded", "available_at": "2025-01-02T15:01:00+08:00"},
+    {"source_row_id": "r002", "symbol": "600001.SH", "trade_date": "2025-01-03", "open": 10.20, "high": 10.50, "low": 10.10, "close": 10.40, "volume": 110000, "amount": 1138500.00, "status": "traded", "available_at": "2025-01-03T15:01:00+08:00"},
+    {"source_row_id": "r003", "symbol": "600001.SH", "trade_date": "2025-01-06", "open": 10.40, "high": 10.60, "low": 10.20, "close": 10.50, "volume": 120000, "amount": 1254000.00, "status": "traded", "available_at": "2025-01-06T15:01:00+08:00"},
+    {"source_row_id": "r004", "symbol": "600002.SH", "trade_date": "2025-01-03", "open": 20.00, "high": 20.20, "low": 19.80, "close": 20.00, "volume": 80000, "amount": 1600000.00, "status": "traded", "available_at": "2025-01-03T15:01:00+08:00"},
+    {"source_row_id": "r005a", "symbol": "600002.SH", "trade_date": "2025-01-06", "open": 19.50, "high": 19.80, "low": 19.40, "close": 19.70, "volume": 90000, "amount": 1764000.00, "status": "traded", "available_at": "2025-01-06T15:01:00+08:00"},
+    {"source_row_id": "r005b", "symbol": "600002.SH", "trade_date": "2025-01-06", "open": 19.50, "high": 19.80, "low": 19.40, "close": 19.70, "volume": 90000, "amount": 1764000.00, "status": "traded", "available_at": "2025-01-06T15:01:00+08:00"},
+    {"source_row_id": "r005c", "symbol": "600002.SH", "trade_date": "2025-01-08", "open": 19.70, "high": 20.00, "low": 19.60, "close": 19.90, "volume": 95000, "amount": 1881000.00, "status": "traded", "available_at": "2025-01-08T15:01:00+08:00"},
+    {"source_row_id": "r005d", "symbol": "600002.SH", "trade_date": "2025-01-09", "open": 19.90, "high": 20.10, "low": 19.80, "close": 20.00, "volume": 100000, "amount": 1995000.00, "status": "traded", "available_at": "2025-01-09T15:01:00+08:00"},
+    {"source_row_id": "r006", "symbol": "000003.SZ", "trade_date": "2025-01-03", "open": 8.00, "high": 8.80, "low": 8.00, "close": 8.80, "volume": 300000, "amount": 2560000.00, "status": "traded", "available_at": "2025-01-03T15:01:00+08:00"},
+    {"source_row_id": "r007", "symbol": "000003.SZ", "trade_date": "2025-01-06", "open": 4.40, "high": 4.60, "low": 4.30, "close": 4.50, "volume": 620000, "amount": 2770000.00, "status": "traded", "available_at": "2025-01-06T15:01:00+08:00"},
+    {"source_row_id": "r008", "symbol": "600004.SH", "trade_date": "2025-01-07", "open": 10.00, "high": 10.10, "low": 9.90, "close": 10.00, "volume": 70000, "amount": 700000.00, "status": "traded", "available_at": "2025-01-07T15:01:00+08:00"},
+    {"source_row_id": "r009", "symbol": "600004.SH", "trade_date": "2025-01-08", "open": 9.17, "high": 9.30, "low": 9.10, "close": 9.20, "volume": 85000, "amount": 782000.00, "status": "traded", "available_at": "2025-01-08T15:01:00+08:00"},
+    {"source_row_id": "r010", "symbol": "600004.SH", "trade_date": "2025-01-09", "open": 9.20, "high": 9.25, "low": 9.00, "close": 9.10, "volume": 60000, "amount": 546000.00, "status": "traded", "available_at": "2025-01-09T15:01:00+08:00"},
+    {"source_row_id": "r011", "symbol": "600005.SH", "trade_date": "2025-01-03", "open": 5.00, "high": 5.00, "low": 5.00, "close": 5.00, "volume": 50000, "amount": 250000.00, "status": "traded", "available_at": "2025-01-03T15:01:00+08:00"},
+    {"source_row_id": "r012", "symbol": "600005.SH", "trade_date": "2025-01-06", "open": 5.00, "high": 5.00, "low": 5.00, "close": 5.00, "volume": 0, "amount": 0.00, "status": "suspended", "available_at": "2025-01-06T15:01:00+08:00"},
+    {"source_row_id": "r013", "symbol": "600005.SH", "trade_date": "2025-01-07", "open": 5.00, "high": 5.00, "low": 5.00, "close": 5.00, "volume": 0, "amount": 0.00, "status": "suspended", "available_at": "2025-01-07T15:01:00+08:00"},
+    {"source_row_id": "r014", "symbol": "600005.SH", "trade_date": "2025-01-08", "open": 4.75, "high": 4.75, "low": 4.75, "close": 4.75, "volume": 1000, "amount": 4750.00, "status": "traded", "available_at": "2025-01-08T15:01:00+08:00"},
+    {"source_row_id": "r015", "symbol": "600006.SH", "trade_date": "2025-01-06", "open": 12.00, "high": 12.20, "low": 11.90, "close": 12.10, "volume": 100000, "amount": 1205000.00, "status": "traded", "available_at": "2025-01-06T15:01:00+08:00"},
+    {"source_row_id": "r016a", "symbol": "600006.SH", "trade_date": "2025-01-07", "open": 12.10, "high": 12.30, "low": 12.00, "close": 12.20, "volume": 90000, "amount": 1098000.00, "status": "traded", "available_at": "2025-01-07T15:01:00+08:00"},
+    {"source_row_id": "r016b", "symbol": "600006.SH", "trade_date": "2025-01-07", "open": 12.10, "high": 12.40, "low": 12.00, "close": 12.30, "volume": 90000, "amount": 1107000.00, "status": "traded", "available_at": "2025-01-07T15:01:00+08:00"},
+    {"source_row_id": "r017", "symbol": "600006.SH", "trade_date": "2025-01-09", "open": 12.30, "high": 12.50, "low": 12.20, "close": 12.40, "volume": 95000, "amount": 1178000.00, "status": "traded", "available_at": "2025-01-09T15:01:00+08:00"},
+    {"source_row_id": "r018", "symbol": "300007.SZ", "trade_date": "2025-01-06", "open": 30.00, "high": 30.00, "low": 30.00, "close": 30.00, "volume": 100000, "amount": 3000000.00, "status": "traded", "available_at": "2025-01-06T15:01:00+08:00"},
+    {"source_row_id": "r019", "symbol": "300007.SZ", "trade_date": "2025-01-07", "open": 36.00, "high": 36.00, "low": 36.00, "close": 36.00, "volume": 100, "amount": 3600.00, "status": "traded", "available_at": "2025-01-07T15:01:00+08:00"},
+    {"source_row_id": "r020", "symbol": "688008.SH", "trade_date": "2025-01-06", "open": 50.00, "high": 55.00, "low": 49.00, "close": 54.00, "volume": 200000, "amount": 10500000.00, "status": "traded", "available_at": "2025-01-06T15:01:00+08:00"},
+    {"source_row_id": "r021", "symbol": "688008.SH", "trade_date": "2025-01-07", "open": 54.00, "high": 64.80, "low": 54.00, "close": 64.80, "volume": 5000000, "amount": 320000000.00, "status": "traded", "available_at": "2025-01-07T15:01:00+08:00"},
+    {"source_row_id": "r022", "symbol": "510300.SH", "trade_date": "2025-01-06", "open": 4.00, "high": 4.05, "low": 3.98, "close": 4.03, "volume": 10000000, "amount": 40200000.00, "status": "traded", "available_at": "2025-01-06T15:01:00+08:00"},
+    {"source_row_id": "r023", "symbol": "000300.SH", "trade_date": "2025-01-06", "open": 4000.00, "high": 4050.00, "low": 3980.00, "close": 4030.00, "volume": 150000000, "amount": 250000000000.00, "status": "traded", "available_at": "2025-01-06T15:01:00+08:00"}
+  ],
+  "corporate_actions": [
+    {"event_id": "ca-cash-600002-20250106", "symbol": "600002.SH", "kind": "cash_dividend", "announcement_date": "2024-12-20", "record_date": "2025-01-03", "ex_date": "2025-01-06", "pay_date": "2025-01-08", "status": "implemented", "cash_per_share": 0.50, "share_multiplier": 1.0, "rights_ratio": 0.0, "rights_price": null, "single_event_factor": 0.975, "cumulative_factor_after": 0.975},
+    {"event_id": "ca-split-000003-20250106", "symbol": "000003.SZ", "kind": "share_split", "announcement_date": "2024-12-23", "record_date": "2025-01-03", "ex_date": "2025-01-06", "pay_date": "2025-01-06", "status": "implemented", "cash_per_share": 0.0, "share_multiplier": 2.0, "rights_ratio": 0.0, "rights_price": null, "single_event_factor": 0.5, "cumulative_factor_after": 0.5},
+    {"event_id": "ca-rights-600004-20250108", "symbol": "600004.SH", "kind": "rights_issue", "announcement_date": "2024-12-10", "record_date": "2025-01-07", "ex_date": "2025-01-08", "pay_date": "2025-01-09", "status": "implemented", "cash_per_share": 0.0, "share_multiplier": 1.2, "rights_ratio": 0.2, "rights_price": 5.0, "single_event_factor": 0.9166666666666666, "cumulative_factor_after": 0.9166666666666666}
+  ],
+  "point_in_time_metadata": [
+    {"symbol": "600001.SH", "field": "industry", "value": "consumer", "effective_date": "2025-01-01", "known_at": "2025-01-01T08:00:00+08:00"},
+    {"symbol": "600001.SH", "field": "industry", "value": "consumer-services", "effective_date": "2025-01-06", "known_at": "2025-01-07T08:00:00+08:00"},
+    {"symbol": "600001.SH", "field": "index_member", "value": false, "effective_date": "2025-01-01", "known_at": "2024-12-20T08:00:00+08:00"},
+    {"symbol": "600001.SH", "field": "index_member", "value": true, "effective_date": "2025-01-08", "known_at": "2025-01-06T08:00:00+08:00"},
+    {"symbol": "600005.SH", "field": "is_st", "value": false, "effective_date": "2025-01-01", "known_at": "2024-12-31T08:00:00+08:00"},
+    {"symbol": "600005.SH", "field": "is_st", "value": true, "effective_date": "2025-01-06", "known_at": "2025-01-03T18:00:00+08:00"},
+    {"symbol": "600002.SH", "field": "financial_metric", "value": 1.25, "effective_date": "2024-09-30", "known_at": "2025-01-03T18:00:00+08:00"},
+    {"symbol": "600002.SH", "field": "financial_metric", "value": 1.50, "effective_date": "2024-12-31", "known_at": "2025-01-09T18:00:00+08:00"}
+  ],
+  "expected": {
+    "missing": [
+      {"symbol": "600005.SH", "trade_date": "2025-01-06", "classification": "suspension"},
+      {"symbol": "600006.SH", "trade_date": "2025-01-08", "classification": "true_missing"},
+      {"symbol": "000003.SZ", "trade_date": "2025-01-02", "classification": "not_listed"},
+      {"symbol": "600004.SH", "trade_date": "2025-01-10", "classification": "delisted"}
+    ],
+    "deduplication": [
+      {"symbol": "600002.SH", "trade_date": "2025-01-06", "outcome": "deduplicate", "conflicting_fields": []},
+      {"symbol": "600006.SH", "trade_date": "2025-01-07", "outcome": "reject_conflict", "conflicting_fields": ["amount", "close", "high"]}
+    ],
+    "execution_limits": [
+      {"symbol": "600001.SH", "trade_date": "2025-01-06", "rule": "main_10pct", "order_side": "buy", "outcome": "filled", "maximum_fill_shares": 120000},
+      {"symbol": "600005.SH", "trade_date": "2025-01-08", "rule": "st_5pct", "order_side": "sell", "outcome": "rejected_locked_limit", "maximum_fill_shares": 0},
+      {"symbol": "300007.SZ", "trade_date": "2025-01-07", "rule": "chinext_20pct", "order_side": "buy", "outcome": "rejected_locked_limit", "maximum_fill_shares": 0},
+      {"symbol": "300007.SZ", "trade_date": "2025-01-07", "rule": "chinext_20pct", "order_side": "sell", "outcome": "partial_capacity", "maximum_fill_shares": 100},
+      {"symbol": "688008.SH", "trade_date": "2025-01-07", "rule": "star_20pct", "order_side": "sell", "outcome": "filled", "maximum_fill_shares": 5000000}
+    ],
+    "similarity_samples": [
+      {"symbol": "600001.SH", "relation": "near", "feature_value": 1.02},
+      {"symbol": "600002.SH", "relation": "reverse", "feature_value": -1.02},
+      {"symbol": "600006.SH", "relation": "missing", "feature_value": null},
+      {"symbol": "688008.SH", "relation": "outlier", "feature_value": 99.0}
+    ]
+  }
+}

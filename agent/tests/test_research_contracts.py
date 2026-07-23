@@ -42,9 +42,12 @@ from src.research.contracts import (
     canonical_sha256,
     create_research_object,
 )
+from src.research.graph import ResearchGraphError, validate_research_chain
+from src.research.migrations import MigrationError, migrate_research_object
 
 _QA_COMMIT = "a69e978a2e38d045a64c380cc3b5c9fa08fa4903"
 _FIXTURE = Path(__file__).parent / "fixtures" / "research" / "qe1_research_spec_v1.json"
+_LEGACY_FIXTURE = Path(__file__).parent / "fixtures" / "research" / "qe1_research_spec_v0_9.json"
 
 
 def _qe1_object_chain() -> tuple[ResearchObject, ...]:
@@ -280,6 +283,50 @@ def test_ct01_generated_json_schema_is_strict_and_discriminated() -> None:
         "backtest_run",
         "research_report",
     }
+
+
+def test_ct03_committed_legacy_fixture_migrates_deterministically() -> None:
+    raw = json.loads(_LEGACY_FIXTURE.read_text(encoding="utf-8"))
+    first = migrate_research_object(raw)
+    second = migrate_research_object(dict(reversed(tuple(raw.items()))))
+
+    assert first.source_version == "0.9"
+    assert first.target_version == "1.0"
+    assert first.source_sha256 == second.source_sha256
+    assert first.object == second.object
+    assert first.object.payload.object_type == "research_spec"
+    assert first.object.payload.lookback_days == (120,)
+    assert first.object.owner_scope == "household:v1"
+
+
+def test_ct03_migration_rejects_unknown_versions_and_legacy_fields() -> None:
+    raw = json.loads(_LEGACY_FIXTURE.read_text(encoding="utf-8"))
+    unsupported = dict(raw)
+    unsupported["schema_version"] = "0.8"
+    with pytest.raises(MigrationError, match="unsupported schema migration"):
+        migrate_research_object(unsupported)
+
+    unknown = dict(raw)
+    unknown["surprise"] = True
+    with pytest.raises(MigrationError, match=r"unknown=\['surprise'\]"):
+        migrate_research_object(unknown)
+
+
+def test_ct03_complete_object_chain_uses_one_spec_and_snapshot() -> None:
+    objects = _qe1_object_chain()
+    validate_research_chain(objects)
+
+    with pytest.raises(ResearchGraphError, match="exactly one research_spec"):
+        validate_research_chain(objects[1:])
+
+    research, snapshot, *rest = objects
+    second_snapshot = create_research_object(
+        snapshot.payload.model_copy(update={"snapshot_sha256": "9" * 64}),
+        parent_refs=(research.ref(),),
+        created_at=snapshot.created_at,
+    )
+    with pytest.raises(ResearchGraphError, match="exactly one data_snapshot_ref"):
+        validate_research_chain((research, snapshot, second_snapshot, *rest))
 
 
 def test_ct01_unknown_fields_and_unknown_major_version_fail_closed() -> None:
