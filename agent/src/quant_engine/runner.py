@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import selectors
 import shutil
@@ -68,6 +69,62 @@ class WorkerExecutionError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.stderr = stderr
+
+
+SNAPSHOT_MANIFEST_VERSION = "vibe.snapshot-manifest.v1"
+
+
+def _hash_regular_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+    except OSError as exc:
+        raise WorkerExecutionError("PATH_VIOLATION", "snapshot file cannot be read") from exc
+    return digest.hexdigest()
+
+
+def compute_snapshot_sha256(path: Path) -> str:
+    """Hash a file's bytes or a directory's canonical regular-file manifest."""
+
+    try:
+        mode = path.lstat().st_mode
+    except OSError as exc:
+        raise WorkerExecutionError("PATH_VIOLATION", "snapshot path cannot be inspected") from exc
+    if stat.S_ISLNK(mode):
+        raise WorkerExecutionError("PATH_VIOLATION", "snapshot path contains a symlink")
+    if stat.S_ISREG(mode):
+        return _hash_regular_file(path)
+    if not stat.S_ISDIR(mode):
+        raise WorkerExecutionError("PATH_VIOLATION", "snapshot path must be a regular file or directory")
+
+    entries: list[dict[str, Any]] = []
+    try:
+        children = sorted(path.rglob("*"), key=lambda child: child.relative_to(path).as_posix())
+        for child in children:
+            child_mode = child.lstat().st_mode
+            relative = child.relative_to(path).as_posix()
+            if stat.S_ISLNK(child_mode):
+                raise WorkerExecutionError("PATH_VIOLATION", f"snapshot manifest contains symlink: {relative}")
+            if stat.S_ISDIR(child_mode):
+                continue
+            if not stat.S_ISREG(child_mode):
+                raise WorkerExecutionError("PATH_VIOLATION", f"snapshot manifest contains special file: {relative}")
+            entries.append(
+                {
+                    "path": relative,
+                    "size": child.stat().st_size,
+                    "sha256": _hash_regular_file(child),
+                }
+            )
+    except WorkerExecutionError:
+        raise
+    except OSError as exc:
+        raise WorkerExecutionError("PATH_VIOLATION", "snapshot directory cannot be read") from exc
+
+    manifest = {"version": SNAPSHOT_MANIFEST_VERSION, "files": entries}
+    return hashlib.sha256(canonical_json(manifest).encode("utf-8")).hexdigest()
 
 
 class WorkerRunner:
@@ -217,7 +274,10 @@ class WorkerRunner:
 
         normalized_snapshot: str | None = None
         if snapshot_path is not None:
-            normalized_snapshot = str(self._validate_snapshot_path(snapshot_path, self.config.snapshot_root))
+            resolved_snapshot = self._validate_snapshot_path(snapshot_path, self.config.snapshot_root)
+            normalized_snapshot = str(resolved_snapshot)
+            if snapshot_sha256 is None:
+                raise WorkerExecutionError("SNAPSHOT_HASH_REQUIRED", "snapshot.sha256 is required")
         request = build_request(
             request_id=request_id,
             engine=self.config.engine,
@@ -230,6 +290,13 @@ class WorkerRunner:
             max_stderr_bytes=max_stderr_bytes,
         )
         validate_request(request, expected_engine=self.config.engine)
+        if normalized_snapshot is not None:
+            actual_snapshot_sha256 = compute_snapshot_sha256(Path(normalized_snapshot))
+            if actual_snapshot_sha256 != snapshot_sha256:
+                raise WorkerExecutionError(
+                    "SNAPSHOT_HASH_MISMATCH",
+                    "snapshot content does not match snapshot.sha256",
+                )
         request_line = (canonical_json(request) + "\n").encode("utf-8")
         if len(request_line) > MAX_REQUEST_BYTES:
             raise WorkerExecutionError(

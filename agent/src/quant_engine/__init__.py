@@ -16,7 +16,7 @@ from .protocol import (
     validate_request,
     validate_response,
 )
-from .runner import RunResult, WorkerConfig, WorkerExecutionError, WorkerRunner
+from .runner import RunResult, WorkerConfig, WorkerExecutionError, WorkerRunner, compute_snapshot_sha256
 
 __all__ = [
     "PROTOCOL_NAME",
@@ -29,6 +29,7 @@ __all__ = [
     "WorkerRunner",
     "build_request",
     "canonical_json",
+    "compute_snapshot_sha256",
     "strict_json_loads",
     "validate_request",
     "validate_response",

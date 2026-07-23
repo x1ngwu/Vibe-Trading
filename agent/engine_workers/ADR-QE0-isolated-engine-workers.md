@@ -1,7 +1,7 @@
 # ADR QE0：隔离量化引擎 worker 的 PoC 边界
 
-- 状态：协议与两平台 direct smoke 已通过；post-commit review 的 CT-04、WK-02 和实际执行源码闭包
-  已修复并补齐负例，WK-01/SE-04 制品完整性、snapshot 内容绑定及内核隔离仍未关闭
+- 状态：协议、两平台 direct smoke、post-commit review、snapshot/制品完整性与容器内核隔离均已
+  通过 QE0 自动门禁；尚未接生产，等待本批提交与 G1 复核
 - 日期：2026-07-23 JST
 - Vibe 源码基线：`6bccd6974ad7d7a63318bce6c41f0064614404d4`
 - 源码分支：`agent/nlq-quant-engine-poc`
@@ -27,10 +27,11 @@ API key、token、password 等秘密。Python socket 的 connect、DNS、bind �
 外部引擎前被禁用，父进程的动态加载路径不继承。snapshot 路径在 runner 和 worker 两侧拒绝越界、
 symlink、FIFO/device 等特殊文件。
 
-上述 Python 网络 guard 和路径检查是 PoC 防线，不是生产安全边界。当前主机无法创建 user/network
-namespace：bubblewrap 分别失败于 `setting up uid map: Permission denied` 和
-`loopback: Failed RTM_NEWADDR: Operation not permitted`。因此“内核级无网络”和“只读 bind mount”
-尚未验证；在容器/seccomp/namespace 门禁完成前，不得把 worker 接入生产。
+上述 Python 网络 guard 和路径检查不是单独的生产安全边界。当前主机直接运行 bubblewrap 仍因
+`setting up uid map: Permission denied` / `loopback: Failed RTM_NEWADDR` 失败；因此 QE0 改用本机
+Docker 的 AppArmor、默认 seccomp 与独立 network/cgroup namespace 验证。容器使用固定本地 image ID、
+`--network none --read-only --cap-drop ALL --security-opt no-new-privileges` 和只读 snapshot bind mount；
+该门禁已通过，但生产部署尚未新增容器入口。
 
 ## adopt / port / reimplement / drop
 
@@ -53,9 +54,13 @@ namespace：bubblewrap 分别失败于 `setting up uid map: Permission denied` �
 | 文件 | SHA-256 |
 |---|---|
 | `quantaxis/requirements.in` | `2baf884cd7b2b12223d15dcb7880e760273685f21b0dd7a3738e8f6bbadf023e` |
-| `quantaxis/requirements-lock.txt` | `d81da4ce671312408a00c3c544b7e0a7c0c09ff849e9d4365a33fa815e734b93` |
+| `quantaxis/requirements-lock.txt` | `5ecdf36d69a2d4f48d8037f2db0d257de9ad11bd5bc808e0d8edcc4b116194b9` |
+| `quantaxis/artifact-manifest.json` | `8a01956733a46111c29c40e49bbe31120bfcf05ca00b7cda28ec68d7238a5190` |
+| `quantaxis/requirements-artifacts.txt` | `a6acfde9e4b791ef316d50cac3bef901d7f0d14823b774aa2fc496061193313e` |
 | `vnpy/requirements.in` | `a31c048b40d5c23bfcfdc4d03ea14b3c1dc5217e8c0b4859b3e809cc68c5921a` |
 | `vnpy/requirements-lock.txt` | `540df31956cd6e5a2c154174a60d7585dfc0b41c3bda4d30f256a4922932632f` |
+| `vnpy/artifact-manifest.json` | `cdcab8a84e5e4d21f7a18f2649d3b9b4a465e034988afdb6085c7db08b2ab003` |
+| `vnpy/requirements-artifacts.txt` | `1f3d8ef3f529ca31bc5cdcf8a04a4870d6b27453a81550a58ab361d088584a5f` |
 
 各 worker 的 `NOTICE.md` 记录上游 URL、commit、版本、MIT 许可证和许可证原文链接；没有复制第三方
 源码到 Vibe。lock 是 QE0 的 Linux/Python 环境冻结，不修改主 lock。capability 和 direct smoke 会先
@@ -64,8 +69,27 @@ SHA-256；任一文件缺失、为 symlink 或内容漂移均以 `ENGINE_PROVENA
 分别以 `ENGINE_UNAVAILABLE`、`ENGINE_VERSION_MISMATCH` 失败，不再宣告可执行 operation。
 
 post-commit 修复已纳入遗漏的 `QAUtil/QAParameter.py` 与 vn.py 4 个包初始化/导入文件，并逐一覆盖
-15 个受信文件的 tamper 负例。当前 lock 仍只固定版本/VCS commit，没有 wheel/sdist artifact hash；
-因此执行源码闭包已关闭，但 WK-01/SE-04 的依赖制品完整性仍为 partial。
+15 个受信文件的 tamper 负例。真实 wheel 构建另发现 QUANTAXIS lock 漏掉 `setuptools==83.0.0`，
+已显式补锁；主 `requirements-lock.txt` 未改变。
+
+## 依赖制品与 snapshot 完整性决策
+
+生产候选采用每个引擎独立的离线 wheelhouse 或不可变 worker 镜像。新增标准库-only
+`common/artifact_manifest.py`：把 VCS 依赖解析后的 wheel 与 lock 逐项匹配，manifest 记录 lock
+SHA-256、Python/ABI/platform、每个制品的文件名/版本/大小/SHA-256，并生成无 VCS URL 的 hashed
+requirements。运行时只允许 `--no-index --require-hashes` 安装或启动已核对 digest 的镜像。
+
+真实证据已经完成：QUANTAXIS 为 CPython 3.11.15、170 个 wheel、316,670,271 bytes；vn.py 为
+CPython 3.12.3、44 个 wheel、303,984,263 bytes。两者都在全新 venv 以 `PIP_NO_INDEX=1 --no-index
+--require-hashes` 安装成功并通过 direct smoke；分别篡改 `appdirs` 和 `attrs` wheel 时 manifest verifier
+以状态 2 失败，恢复后重新验证通过。制品不提交到 Git，只提交 manifest 和 hashed requirements；
+生产构建须从受控 artifact store 取得与 manifest 一致的 wheelhouse。
+
+`snapshot.sha256` 现在必填。单文件 digest 是原始字节 SHA-256；目录 digest 是
+`vibe.snapshot-manifest.v1` 的 canonical JSON SHA-256，files 按 POSIX 相对路径排序，每项固定
+`path/size/sha256`，空目录不影响内容标识。runner 规范化受限路径后校验一次，worker 在 handler
+执行前以同一算法再校验；缺失 hash、内容变化、嵌套 symlink 或特殊文件均 fail closed。双侧校验缩小
+dispatch 前篡改窗口，但不能替代 WK-05 的内核只读挂载。
 
 ## 2026-07-22–23 测量
 
@@ -81,6 +105,7 @@ post-commit 修复已纳入遗漏的 `QAUtil/QAParameter.py` 与 vn.py 4 个包�
 | vn.py security probe | 0.060 s | 17,656 KiB | 同上 | 通过 |
 | vn.py EventEngine direct smoke | 0.098 s | 19,572 KiB | 同上 | 通过 |
 | vn.py 全新 lock 安装 | 42.87 s | 145,728 KiB | 932 MiB | 通过；安装后 direct smoke 1.03 s |
+| Docker kernel-isolation gate | 1.13 s | 256 MiB hard limit | `python:3.11-slim` image | 2 passed；无外网、只读 snapshot、seccomp/no-new-privileges/零 capabilities |
 
 QUANTAXIS Python 3.11 lock 安装解析/构建约 47 秒（已有网络和共享缓存）；vn.py 在全新 venv、
 固定 lock、已有网络和共享缓存下安装为 42.87 秒，随后 direct smoke 通过。聚合包顶层 import 的
@@ -94,42 +119,45 @@ adapter 语义。
 | ID | 状态 | 证据/缺口 |
 |---|---|---|
 | CT-04 | passed | 两个引擎分别覆盖缺包、错误版本和 provenance 不符；校验失败时 capability 不宣告 operation。 |
-| WK-01 | partial | 三套依赖分离且固定版本/VCS commit；wheel/sdist 制品 hash 未固定。 |
+| WK-01 | passed（QE0 范围） | 两套真实 manifest/hashed requirements、全新离线 hash 安装、direct smoke 和单制品 tamper 负例通过；主 lock 未改变。 |
 | WK-02 | passed | 严格响应解码及完整 response canonical 校验拒绝 result/error 中的 `NaN`、`Infinity`、`-Infinity`。 |
 | WK-04 | passed | timeout、cancel 和含子进程的进程组清理自动测试。 |
-| WK-05 | partial | 越界、symlink、FIFO 被拒；只读挂载因 namespace 权限尚未验证。 |
-| WK-06 | partial | 秘密清除、动态加载路径清除、时区/locale/seed/thread、connect/DNS/bind/UDP guard 通过；内核级断网未验证。 |
+| WK-05 | passed（QE0 容器范围） | 越界、symlink、FIFO 被拒；只读 bind 的可写对照返回 `EROFS`，worker 可读取并校验 snapshot。 |
+| WK-06 | passed（QE0 容器范围） | Python 全 socket guard 与 Docker `--network none` 均通过；seccomp=2、NoNewPrivs=1、CapEff=0，固定环境可重放。 |
 | SE-02 | passed（PoC 范围） | 测试环境不继承命名秘密；stderr 有界；仍需合并前执行仓库秘密扫描。 |
-| SE-04 | partial | QUANTAXIS 8 文件、vn.py 7 文件执行源码闭包及逐文件 tamper 已通过；依赖制品 artifact hash 尚未固定。 |
-| snapshot 内容绑定 | open（QE1/QE2 前置） | `snapshot_sha256` 只校验格式，尚未与文件或 manifest 内容比对。 |
+| SE-04 | passed（QE0 范围） | 8+7 个执行源码文件和 170+44 个依赖 wheel 均固定 SHA-256；源码与制品 tamper 均失败关闭。 |
+| snapshot 内容绑定 | passed（QE0 契约） | hash 必填；file 原始字节、directory v1 canonical manifest 在 runner/worker 双侧校验，篡改失败。 |
 | PR-01 | passed（PoC 范围） | 两平台启动、RSS、磁盘增量和全新 lock 安装耗时已记录。 |
 | 两平台 direct smoke | passed | QUANTAXIS 叶子模块 qfq/hfq、日历、MA2、QIFI 离线成交和 vn.py EventEngine 均通过，重复运行核心结果一致。 |
 
 完整 QE0 自动测试命令；隔离解释器未提供时 direct smoke 会明确 skip：
 
 ```bash
+VIBE_QE0_CONTAINER_GATE=1 \
 VIBE_QE0_QUANTAXIS_PYTHON=/path/to/qa-venv/bin/python \
 VIBE_QE0_VNPY_PYTHON=/path/to/vnpy-venv/bin/python \
 .venv/bin/pytest -q \
+  agent/tests/test_quant_engine_artifact_manifest.py \
+  agent/tests/test_quant_engine_container_isolation.py \
   agent/tests/test_quant_engine_protocol.py \
   agent/tests/test_quant_engine_runner.py \
   agent/tests/test_quant_engine_direct_smoke.py
 ```
 
-post-commit 修复后的定向结果：`53 passed in 3.84s`，使用现有两个隔离解释器完成真实 capability 与
-两平台 direct smoke，并覆盖缺包、错版、15 个受信文件逐一篡改及 response result/error 的
-`NaN`/`Infinity`/`-Infinity`。修复前的 `24 passed in 4.56s` 仅保留为历史基线。
+本轮定向结果：`70 passed in 5.20s`，使用两个全新离线安装的隔离解释器与两个短生命周期硬化容器；
+除协议、snapshot、manifest 和 artifact tamper 外，还验证只读 bind `EROFS`、无外网、seccomp、
+no-new-privileges、零 capabilities 及容器内 worker snapshot 双检。
 
-post-commit 完整后端回归以仓库约定占位值显式跳过实时 Tushare E2E：`5352 passed, 11 skipped,
-20 warnings in 174.46s`。skip 均来自实时凭据或环境/门禁条件；warnings 为既有 FastAPI/Starlette
+完整后端回归在不暴露真实 Tushare 凭据的脱敏占位环境执行：`5367 passed, 13 skipped,
+20 warnings in 172.93s`。其中 2 个新增 skip 是默认不访问 Docker 的 opt-in 容器门禁；
+其余 skip 来自实时凭据或环境条件，warnings 为既有 FastAPI/Starlette
 弃用和 pandas `pct_change` future warning，本轮未新增测试失败。
 
 ## 后续决策门槛
 
-QE0 不接生产。CT-04 capability fail-closed、WK-02 严格响应 JSON 和实际执行源码闭包已关闭；进入
-QE1 前仍须确定 WK-01/SE-04 依赖制品完整性与 snapshot digest 契约，并在具备 user/network namespace
-或等价容器/seccomp 的执行环境验证内核级断网、只读 snapshot bind mount 和特殊文件边界。任一剩余项
-未关闭时 QE0 G1 保持打开。
+QE0 仍不接生产。snapshot、WK-01/SE-04 制品与 WK-05/WK-06 容器内核隔离门禁已经关闭，QE0 自动
+G1 证据齐备；本批仍须提交并复核，随后由用户确认是否进入 QE1。任何正式 adapter/部署仍须复用同等
+或更强的只读 mount、无网络、seccomp、no-new-privileges 和不可变镜像约束。
 
 QUANTAXIS 叶子模块实验已证明技术可行，但 qfq/hfq、因子和 QIFI 账户仍按 `port/对照候选` 处理；
 QE2 必须用固定 fixture、公式和真实公司行动窗口验证，不能直接称为正式 adopt。

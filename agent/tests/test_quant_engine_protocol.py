@@ -142,3 +142,15 @@ def test_response_rejects_non_finite_values_anywhere(value: float, location: str
         validate_response(response, request=request, expected_engine=ENGINE)
 
     assert raised.value.code == "INVALID_JSON_VALUE"
+
+
+def test_snapshot_hash_is_required_by_protocol() -> None:
+    with pytest.raises(ProtocolError) as raised:
+        build_request(
+            request_id="qe0.snapshot-required",
+            engine=ENGINE,
+            operation="echo",
+            snapshot_path="snapshot.json",
+        )
+
+    assert raised.value.code == "INVALID_SCHEMA"

@@ -130,6 +130,60 @@ def _install_network_guard() -> None:
     socket.getnameinfo = deny_connection
 
 
+SNAPSHOT_MANIFEST_VERSION = "vibe.snapshot-manifest.v1"
+
+
+def _hash_regular_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+    except OSError as exc:
+        raise WorkerError("PATH_VIOLATION", "snapshot file cannot be read") from exc
+    return digest.hexdigest()
+
+
+def _snapshot_sha256(path: Path) -> str:
+    try:
+        mode = path.lstat().st_mode
+    except OSError as exc:
+        raise WorkerError("PATH_VIOLATION", "snapshot path cannot be inspected") from exc
+    if stat.S_ISLNK(mode):
+        raise WorkerError("PATH_VIOLATION", "snapshot path contains a symlink")
+    if stat.S_ISREG(mode):
+        return _hash_regular_file(path)
+    if not stat.S_ISDIR(mode):
+        raise WorkerError("PATH_VIOLATION", "snapshot path must be a regular file or directory")
+
+    entries: list[dict[str, Any]] = []
+    try:
+        children = sorted(path.rglob("*"), key=lambda child: child.relative_to(path).as_posix())
+        for child in children:
+            child_mode = child.lstat().st_mode
+            relative = child.relative_to(path).as_posix()
+            if stat.S_ISLNK(child_mode):
+                raise WorkerError("PATH_VIOLATION", f"snapshot manifest contains symlink: {relative}")
+            if stat.S_ISDIR(child_mode):
+                continue
+            if not stat.S_ISREG(child_mode):
+                raise WorkerError("PATH_VIOLATION", f"snapshot manifest contains special file: {relative}")
+            entries.append(
+                {
+                    "path": relative,
+                    "size": child.stat().st_size,
+                    "sha256": _hash_regular_file(child),
+                }
+            )
+    except WorkerError:
+        raise
+    except OSError as exc:
+        raise WorkerError("PATH_VIOLATION", "snapshot directory cannot be read") from exc
+
+    manifest = {"version": SNAPSHOT_MANIFEST_VERSION, "files": entries}
+    return hashlib.sha256(canonical_json(manifest).encode("utf-8")).hexdigest()
+
+
 def _validate_snapshot(request: Mapping[str, Any]) -> None:
     snapshot = request.get("snapshot")
     if snapshot is None:
@@ -141,10 +195,8 @@ def _validate_snapshot(request: Mapping[str, Any]) -> None:
     if not root_text or not isinstance(path_text, str):
         raise WorkerError("PATH_VIOLATION", "snapshot root/path is unavailable")
     snapshot_sha256 = snapshot.get("sha256")
-    if snapshot_sha256 is not None and (
-        not isinstance(snapshot_sha256, str) or not _SHA256_RE.fullmatch(snapshot_sha256)
-    ):
-        raise WorkerError("INVALID_SCHEMA", "snapshot.sha256 must be null or lowercase SHA-256")
+    if not isinstance(snapshot_sha256, str) or not _SHA256_RE.fullmatch(snapshot_sha256):
+        raise WorkerError("INVALID_SCHEMA", "snapshot.sha256 must be lowercase SHA-256")
     root = Path(root_text).resolve(strict=True)
     candidate = Path(path_text)
     if not candidate.is_absolute():
@@ -166,6 +218,9 @@ def _validate_snapshot(request: Mapping[str, Any]) -> None:
     mode = resolved.stat().st_mode
     if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
         raise WorkerError("PATH_VIOLATION", "snapshot path must be a regular file or directory")
+    actual_snapshot_sha256 = _snapshot_sha256(resolved)
+    if actual_snapshot_sha256 != snapshot_sha256:
+        raise WorkerError("SNAPSHOT_HASH_MISMATCH", "snapshot content does not match snapshot.sha256")
 
 
 def _validate_limits(value: Any) -> None:

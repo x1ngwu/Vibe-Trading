@@ -212,10 +212,8 @@ def validate_request(value: Any, *, expected_engine: EngineIdentity | None = Non
         if not isinstance(snapshot.get("path"), str) or not snapshot.get("path"):
             raise ProtocolError("INVALID_SCHEMA", "snapshot.path is required")
         snapshot_hash = snapshot.get("sha256")
-        if snapshot_hash is not None and (
-            not isinstance(snapshot_hash, str) or not _SHA256_RE.fullmatch(snapshot_hash)
-        ):
-            raise ProtocolError("INVALID_SCHEMA", "snapshot.sha256 must be null or lowercase SHA-256")
+        if not isinstance(snapshot_hash, str) or not _SHA256_RE.fullmatch(snapshot_hash):
+            raise ProtocolError("INVALID_SCHEMA", "snapshot.sha256 must be lowercase SHA-256")
     _validate_limits(value.get("limits"))
     supplied_hash = value.get("content_sha256")
     if not isinstance(supplied_hash, str) or not _SHA256_RE.fullmatch(supplied_hash):

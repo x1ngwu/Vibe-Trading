@@ -1,0 +1,368 @@
+{
+  "artifacts": [
+    {
+      "filename": "attrs-26.1.0-py3-none-any.whl",
+      "name": "attrs",
+      "sha256": "c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309",
+      "size": 67548,
+      "source_requirement": "attrs==26.1.0",
+      "version": "26.1.0"
+    },
+    {
+      "filename": "build-1.5.0-py3-none-any.whl",
+      "name": "build",
+      "sha256": "13f3eecb844759ab66efec90ca17639bbf14dc06cb2fdf37a9010322d9c50a6f",
+      "size": 26018,
+      "source_requirement": "build==1.5.0",
+      "version": "1.5.0"
+    },
+    {
+      "filename": "certifi-2026.7.22-py3-none-any.whl",
+      "name": "certifi",
+      "sha256": "62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775",
+      "size": 136983,
+      "source_requirement": "certifi==2026.7.22",
+      "version": "2026.7.22"
+    },
+    {
+      "filename": "cffi-2.1.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "name": "cffi",
+      "sha256": "1e9f50d192a3e525b15a75ab5114e442d83d657b7ec29182a991bc9a88fd3a66",
+      "size": 221844,
+      "source_requirement": "cffi==2.1.0",
+      "version": "2.1.0"
+    },
+    {
+      "filename": "charset_normalizer-3.4.9-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "name": "charset-normalizer",
+      "sha256": "5e226f6218febc71f6c1fc2fafb91c226f75bdc1d8fb12d66823716e891608fd",
+      "size": 224256,
+      "source_requirement": "charset-normalizer==3.4.9",
+      "version": "3.4.9"
+    },
+    {
+      "filename": "colorama-0.4.6-py2.py3-none-any.whl",
+      "name": "colorama",
+      "sha256": "4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6",
+      "size": 25335,
+      "source_requirement": "colorama==0.4.6",
+      "version": "0.4.6"
+    },
+    {
+      "filename": "deap-1.4.4-py3-none-any.whl",
+      "name": "deap",
+      "sha256": "06c2fcf2e9f870da035c1372c9156ee817c2c31659ee70aae2dcc0849d2c8c49",
+      "size": 93078,
+      "source_requirement": "deap==1.4.4",
+      "version": "1.4.4"
+    },
+    {
+      "filename": "fastjsonschema-2.21.2-py3-none-any.whl",
+      "name": "fastjsonschema",
+      "sha256": "1c797122d0a86c5cace2e54bf4e819c36223b552017172f32c5c024a6b77e463",
+      "size": 24024,
+      "source_requirement": "fastjsonschema==2.21.2",
+      "version": "2.21.2"
+    },
+    {
+      "filename": "idna-3.18-py3-none-any.whl",
+      "name": "idna",
+      "sha256": "7f952cbe720b688055e3f87de14f5c3e5fdaa8bc3928985c4077ca689de849a2",
+      "size": 65455,
+      "source_requirement": "idna==3.18",
+      "version": "3.18"
+    },
+    {
+      "filename": "jsonschema-4.26.0-py3-none-any.whl",
+      "name": "jsonschema",
+      "sha256": "d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce",
+      "size": 90630,
+      "source_requirement": "jsonschema==4.26.0",
+      "version": "4.26.0"
+    },
+    {
+      "filename": "jsonschema_specifications-2025.9.1-py3-none-any.whl",
+      "name": "jsonschema-specifications",
+      "sha256": "98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe",
+      "size": 18437,
+      "source_requirement": "jsonschema-specifications==2025.9.1",
+      "version": "2025.9.1"
+    },
+    {
+      "filename": "jupyter_core-5.9.1-py3-none-any.whl",
+      "name": "jupyter_core",
+      "sha256": "ebf87fdc6073d142e114c72c9e29a9d7ca03fad818c5d300ce2adc1fb0743407",
+      "size": 29032,
+      "source_requirement": "jupyter_core==5.9.1",
+      "version": "5.9.1"
+    },
+    {
+      "filename": "loguru-0.7.3-py3-none-any.whl",
+      "name": "loguru",
+      "sha256": "31a33c10c8e1e10422bfd431aeb5d351c7cf7fa671e3c4df004162264b28220c",
+      "size": 61595,
+      "source_requirement": "loguru==0.7.3",
+      "version": "0.7.3"
+    },
+    {
+      "filename": "moocore-0.3.2-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "name": "moocore",
+      "sha256": "8557a411c1b3f9fee90263701ad3fe58dbbcdc8e2b695696358fda5f968accfb",
+      "size": 879476,
+      "source_requirement": "moocore==0.3.2",
+      "version": "0.3.2"
+    },
+    {
+      "filename": "narwhals-2.24.0-py3-none-any.whl",
+      "name": "narwhals",
+      "sha256": "42fdedf44e5b2ca7505630d45b4ac3058f38d8485cba9fe1652ca23152df7489",
+      "size": 461030,
+      "source_requirement": "narwhals==2.24.0",
+      "version": "2.24.0"
+    },
+    {
+      "filename": "nbformat-5.10.4-py3-none-any.whl",
+      "name": "nbformat",
+      "sha256": "3b48d6c8fbca4b299bf3982ea7db1af21580e4fec269ad087b9e81588891200b",
+      "size": 78454,
+      "source_requirement": "nbformat==5.10.4",
+      "version": "5.10.4"
+    },
+    {
+      "filename": "numpy-2.5.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "name": "numpy",
+      "sha256": "59fda5e192b570217ec2580c96f00e9a7e12ef6866a900eb089b62c1a32545ca",
+      "size": 16672469,
+      "source_requirement": "numpy==2.5.1",
+      "version": "2.5.1"
+    },
+    {
+      "filename": "packaging-26.2-py3-none-any.whl",
+      "name": "packaging",
+      "sha256": "5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e",
+      "size": 100195,
+      "source_requirement": "packaging==26.2",
+      "version": "26.2"
+    },
+    {
+      "filename": "pandas-3.0.3-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl",
+      "name": "pandas",
+      "sha256": "6dc0b3fd2169c9157deed50b4d519553a3655c8c6a96027136d654592be973a9",
+      "size": 10894600,
+      "source_requirement": "pandas==3.0.3",
+      "version": "3.0.3"
+    },
+    {
+      "filename": "platformdirs-4.11.0-py3-none-any.whl",
+      "name": "platformdirs",
+      "sha256": "360ccded2b7fce0af0ff80cc8f5942a1c5d99b0e856033acb030bfc634709e74",
+      "size": 23247,
+      "source_requirement": "platformdirs==4.11.0",
+      "version": "4.11.0"
+    },
+    {
+      "filename": "plotly-6.9.0-py3-none-any.whl",
+      "name": "plotly",
+      "sha256": "36bebe2f1bb13884774fe61689c329071446f6ce4a8927fb1f0d6fb24f581236",
+      "size": 9909646,
+      "source_requirement": "plotly==6.9.0",
+      "version": "6.9.0"
+    },
+    {
+      "filename": "pycparser-3.0-py3-none-any.whl",
+      "name": "pycparser",
+      "sha256": "b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992",
+      "size": 48172,
+      "source_requirement": "pycparser==3.0",
+      "version": "3.0"
+    },
+    {
+      "filename": "pyproject_hooks-1.2.0-py3-none-any.whl",
+      "name": "pyproject_hooks",
+      "sha256": "9e5c6bfa8dcc30091c74b0cf803c81fdd29d94f01992a7707bc97babb1141913",
+      "size": 10216,
+      "source_requirement": "pyproject_hooks==1.2.0",
+      "version": "1.2.0"
+    },
+    {
+      "filename": "pyqtgraph-0.14.0-py3-none-any.whl",
+      "name": "pyqtgraph",
+      "sha256": "7abb7c3e17362add64f8711b474dffac5e7b0e9245abdf992e9a44119b7aa4f5",
+      "size": 1924755,
+      "source_requirement": "pyqtgraph==0.14.0",
+      "version": "0.14.0"
+    },
+    {
+      "filename": "PySide6-6.8.2.1-cp39-abi3-manylinux_2_28_x86_64.whl",
+      "name": "PySide6",
+      "sha256": "23d2a1a77b25459a049c4276b4e0bbfb375b73d3921061b1a16bcfa64e1fe517",
+      "size": 550489,
+      "source_requirement": "PySide6==6.8.2.1",
+      "version": "6.8.2.1"
+    },
+    {
+      "filename": "PySide6_Addons-6.8.2.1-cp39-abi3-manylinux_2_28_x86_64.whl",
+      "name": "PySide6_Addons",
+      "sha256": "f3d85e676851ada8238bc76ebfacbee738fc0b35b3bc15c9765dd107b8ee6ec4",
+      "size": 160641392,
+      "source_requirement": "PySide6_Addons==6.8.2.1",
+      "version": "6.8.2.1"
+    },
+    {
+      "filename": "PySide6_Essentials-6.8.2.1-cp39-abi3-manylinux_2_28_x86_64.whl",
+      "name": "PySide6_Essentials",
+      "sha256": "5ab31e5395a4724102edd6e8ff980fa3f7cde2aa79050763a1dcc30bb914195a",
+      "size": 95331575,
+      "source_requirement": "PySide6_Essentials==6.8.2.1",
+      "version": "6.8.2.1"
+    },
+    {
+      "filename": "python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
+      "name": "python-dateutil",
+      "sha256": "a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427",
+      "size": 229892,
+      "source_requirement": "python-dateutil==2.9.0.post0",
+      "version": "2.9.0.post0"
+    },
+    {
+      "filename": "pyzmq-27.1.0-cp312-abi3-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl",
+      "name": "pyzmq",
+      "sha256": "43ad9a73e3da1fab5b0e7e13402f0b2fb934ae1c876c51d0afff0e7c052eca31",
+      "size": 840995,
+      "source_requirement": "pyzmq==27.1.0",
+      "version": "27.1.0"
+    },
+    {
+      "filename": "QDarkStyle-3.2.3-py2.py3-none-any.whl",
+      "name": "QDarkStyle",
+      "sha256": "ea980ee426d594909cf1058306832af71ff6cbad6f69237b036d1550635aefbc",
+      "size": 871762,
+      "source_requirement": "QDarkStyle==3.2.3",
+      "version": "3.2.3"
+    },
+    {
+      "filename": "qrcode-8.2-py3-none-any.whl",
+      "name": "qrcode",
+      "sha256": "16e64e0716c14960108e85d853062c9e8bba5ca8252c0b4d0231b9df4060ff4f",
+      "size": 45986,
+      "source_requirement": "qrcode==8.2",
+      "version": "8.2"
+    },
+    {
+      "filename": "QtPy-2.4.3-py3-none-any.whl",
+      "name": "QtPy",
+      "sha256": "72095afe13673e017946cc258b8d5da43314197b741ed2890e563cf384b51aa1",
+      "size": 95045,
+      "source_requirement": "QtPy==2.4.3",
+      "version": "2.4.3"
+    },
+    {
+      "filename": "referencing-0.37.0-py3-none-any.whl",
+      "name": "referencing",
+      "sha256": "381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231",
+      "size": 26766,
+      "source_requirement": "referencing==0.37.0",
+      "version": "0.37.0"
+    },
+    {
+      "filename": "requests-2.34.2-py3-none-any.whl",
+      "name": "requests",
+      "sha256": "2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0",
+      "size": 73075,
+      "source_requirement": "requests==2.34.2",
+      "version": "2.34.2"
+    },
+    {
+      "filename": "rpds_py-2026.6.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "name": "rpds-py",
+      "sha256": "ecabd69db66de867690f9797f2f8fa27ba501bbc24540cbdbdc649cd15888ba6",
+      "size": 366189,
+      "source_requirement": "rpds-py==2026.6.3",
+      "version": "2026.6.3"
+    },
+    {
+      "filename": "shiboken6-6.8.2.1-cp39-abi3-manylinux_2_28_x86_64.whl",
+      "name": "shiboken6",
+      "sha256": "c83e90056f13d0872cc4d2b7bf60b6d6e3b1b172f1f91910c0ba5b641af01758",
+      "size": 204273,
+      "source_requirement": "shiboken6==6.8.2.1",
+      "version": "6.8.2.1"
+    },
+    {
+      "filename": "six-1.17.0-py2.py3-none-any.whl",
+      "name": "six",
+      "sha256": "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274",
+      "size": 11050,
+      "source_requirement": "six==1.17.0",
+      "version": "1.17.0"
+    },
+    {
+      "filename": "ta_lib-0.7.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "name": "TA-Lib",
+      "sha256": "48258ccc576eb18362b6606bba173c9edf902689d624d6a0d9a82a82d72bf9d8",
+      "size": 1451583,
+      "source_requirement": "TA-Lib==0.7.1",
+      "version": "0.7.1"
+    },
+    {
+      "filename": "tqdm-4.69.0-py3-none-any.whl",
+      "name": "tqdm",
+      "sha256": "9979978912be667a6ef21fd5d8abf54e324e63d82f7f43c360792ebc2bc4e622",
+      "size": 676680,
+      "source_requirement": "tqdm==4.69.0",
+      "version": "4.69.0"
+    },
+    {
+      "filename": "traitlets-5.15.1-py3-none-any.whl",
+      "name": "traitlets",
+      "sha256": "770a53705f84b81ac107e83a1b3328ff2dae16094d8fc3cfc004e4b22dfd8e92",
+      "size": 85858,
+      "source_requirement": "traitlets==5.15.1",
+      "version": "5.15.1"
+    },
+    {
+      "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+      "name": "typing_extensions",
+      "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+      "size": 45571,
+      "source_requirement": "typing_extensions==4.16.0",
+      "version": "4.16.0"
+    },
+    {
+      "filename": "tzlocal-5.4.4-py3-none-any.whl",
+      "name": "tzlocal",
+      "sha256": "aae09f0126a8a86fa736be266eb4a471380d26a0de3bc14844e7821fee3e2a15",
+      "size": 18115,
+      "source_requirement": "tzlocal==5.4.4",
+      "version": "5.4.4"
+    },
+    {
+      "filename": "urllib3-2.7.0-py3-none-any.whl",
+      "name": "urllib3",
+      "sha256": "9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897",
+      "size": 131087,
+      "source_requirement": "urllib3==2.7.0",
+      "version": "2.7.0"
+    },
+    {
+      "filename": "vnpy-4.4.0-py3-none-any.whl",
+      "name": "vnpy",
+      "sha256": "7ae10d1ebb417c277c490ea988bd0ef88bfc62ab2c1f1613b7ebe2d72b58dec4",
+      "size": 200385,
+      "source_requirement": "vnpy @ git+https://github.com/vnpy/vnpy.git@1b78494979deb4c4996f6b864f234d9839f2f239",
+      "version": "4.4.0"
+    }
+  ],
+  "environment": {
+    "abi": "cpython-312-x86_64-linux-gnu",
+    "implementation": "cpython",
+    "platform": "linux-x86_64",
+    "python": "3.12.3"
+  },
+  "lock": {
+    "filename": "requirements-lock.txt",
+    "sha256": "540df31956cd6e5a2c154174a60d7585dfc0b41c3bda4d30f256a4922932632f",
+    "size": 964
+  },
+  "schema": "vibe.worker-artifacts.v1"
+}

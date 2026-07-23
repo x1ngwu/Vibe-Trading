@@ -12,7 +12,13 @@ import time
 
 import pytest
 
-from src.quant_engine import EngineIdentity, WorkerConfig, WorkerExecutionError, WorkerRunner
+from src.quant_engine import (
+    EngineIdentity,
+    WorkerConfig,
+    WorkerExecutionError,
+    WorkerRunner,
+    compute_snapshot_sha256,
+)
 from src.quant_engine.protocol import build_request, canonical_json, content_sha256
 
 
@@ -146,17 +152,105 @@ def test_snapshot_path_is_bounded_and_rejects_symlinks_and_special_files(
 
 
 def test_snapshot_path_and_hash_reach_worker_unchanged(runner: WorkerRunner) -> None:
+    snapshot_file = runner.config.snapshot_root / "snapshot.json"
+    snapshot_hash = compute_snapshot_sha256(snapshot_file)
     result = runner.run(
         request_id="qe0-snapshot",
         operation="echo",
         snapshot_path="snapshot.json",
-        snapshot_sha256="b" * 64,
+        snapshot_sha256=snapshot_hash,
     )
 
     assert result.response["result"]["snapshot"] == {
-        "path": str((runner.config.snapshot_root / "snapshot.json").resolve()),
-        "sha256": "b" * 64,
+        "path": str(snapshot_file.resolve()),
+        "sha256": snapshot_hash,
     }
+
+
+def test_snapshot_hash_is_required_and_checked_before_launch(runner: WorkerRunner) -> None:
+    missing = _error(runner, "echo", snapshot_path="snapshot.json")
+    assert missing.code == "SNAPSHOT_HASH_REQUIRED"
+
+    mismatch = _error(
+        runner,
+        "echo",
+        snapshot_path="snapshot.json",
+        snapshot_sha256="0" * 64,
+    )
+    assert mismatch.code == "SNAPSHOT_HASH_MISMATCH"
+
+
+def test_directory_snapshot_manifest_is_deterministic_and_content_bound(
+    runner: WorkerRunner,
+) -> None:
+    first = runner.config.snapshot_root / "first"
+    second = runner.config.snapshot_root / "second"
+    for directory in (first, second):
+        (directory / "nested").mkdir(parents=True)
+    (first / "b.json").write_text("{\"b\":2}\n", encoding="utf-8")
+    (first / "nested" / "a.csv").write_text("a\n1\n", encoding="utf-8")
+    (second / "nested" / "a.csv").write_text("a\n1\n", encoding="utf-8")
+    (second / "b.json").write_text("{\"b\":2}\n", encoding="utf-8")
+
+    first_hash = compute_snapshot_sha256(first)
+    assert compute_snapshot_sha256(second) == first_hash
+    result = runner.run(
+        request_id="qe0-directory-snapshot",
+        operation="echo",
+        snapshot_path=str(first),
+        snapshot_sha256=first_hash,
+    )
+    assert result.response["result"]["snapshot"]["sha256"] == first_hash
+
+    (first / "nested" / "a.csv").write_text("a\n2\n", encoding="utf-8")
+    assert compute_snapshot_sha256(first) != first_hash
+    mismatch = _error(
+        runner,
+        "echo",
+        snapshot_path=str(first),
+        snapshot_sha256=first_hash,
+    )
+    assert mismatch.code == "SNAPSHOT_HASH_MISMATCH"
+
+
+def test_directory_snapshot_manifest_rejects_nested_symlink(
+    runner: WorkerRunner,
+) -> None:
+    directory = runner.config.snapshot_root / "with-link"
+    directory.mkdir()
+    (directory / "link.json").symlink_to(runner.config.snapshot_root / "snapshot.json")
+
+    with pytest.raises(WorkerExecutionError) as raised:
+        compute_snapshot_sha256(directory)
+
+    assert raised.value.code == "PATH_VIOLATION"
+
+
+def test_worker_revalidates_snapshot_after_runner_side_hashing(runner: WorkerRunner) -> None:
+    snapshot_file = runner.config.snapshot_root / "snapshot.json"
+    snapshot_hash = compute_snapshot_sha256(snapshot_file)
+    request = build_request(
+        request_id="qe0-worker-snapshot-tamper",
+        engine=ENGINE,
+        operation="echo",
+        snapshot_path=str(snapshot_file),
+        snapshot_sha256=snapshot_hash,
+    )
+    snapshot_file.write_text("{\"tampered\":true}\n", encoding="utf-8")
+
+    completed = subprocess.run(
+        [str(runner.config.python), "-B", str(runner.config.script)],
+        input=(canonical_json(request) + "\n").encode("utf-8"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=str(runner.config.script.parent),
+        env=runner._worker_env(runner.config.snapshot_root),
+        check=False,
+    )
+    assert completed.returncode == 0
+    response = json.loads(completed.stdout)
+    assert response["status"] == "error"
+    assert response["error"]["code"] == "SNAPSHOT_HASH_MISMATCH"
 
 
 def test_worker_gets_no_inherited_secrets_and_deterministic_environment(
