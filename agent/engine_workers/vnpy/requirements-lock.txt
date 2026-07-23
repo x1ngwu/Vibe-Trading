@@ -1,0 +1,46 @@
+# QE0 Linux/Python 3.12 freeze; generated 2026-07-22.
+# This environment is isolated from Vibe's requirements-lock.txt.
+attrs==26.1.0
+build==1.5.0
+certifi==2026.7.22
+cffi==2.1.0
+charset-normalizer==3.4.9
+colorama==0.4.6
+deap==1.4.4
+fastjsonschema==2.21.2
+idna==3.18
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+jupyter_core==5.9.1
+loguru==0.7.3
+moocore==0.3.2
+narwhals==2.24.0
+nbformat==5.10.4
+numpy==2.5.1
+packaging==26.2
+pandas==3.0.3
+platformdirs==4.11.0
+plotly==6.9.0
+pycparser==3.0
+pyproject_hooks==1.2.0
+pyqtgraph==0.14.0
+PySide6==6.8.2.1
+PySide6_Addons==6.8.2.1
+PySide6_Essentials==6.8.2.1
+python-dateutil==2.9.0.post0
+pyzmq==27.1.0
+QDarkStyle==3.2.3
+qrcode==8.2
+QtPy==2.4.3
+referencing==0.37.0
+requests==2.34.2
+rpds-py==2026.6.3
+shiboken6==6.8.2.1
+six==1.17.0
+TA-Lib==0.7.1
+tqdm==4.69.0
+traitlets==5.15.1
+typing_extensions==4.16.0
+tzlocal==5.4.4
+urllib3==2.7.0
+vnpy @ git+https://github.com/vnpy/vnpy.git@1b78494979deb4c4996f6b864f234d9839f2f239
