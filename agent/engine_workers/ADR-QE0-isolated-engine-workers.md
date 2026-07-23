@@ -1,7 +1,7 @@
 # ADR QE0：隔离量化引擎 worker 的 PoC 边界
 
-- 状态：协议、两平台 direct smoke、post-commit review、snapshot/制品完整性与容器内核隔离均已
-  通过 QE0 自动门禁；尚未接生产，等待本批提交与 G1 复核
+- 状态：Accepted；协议、两平台 direct smoke、post-commit review、snapshot/制品完整性与容器内核
+  隔离均已通过 QE0 G1 门禁。源码提交 `882da2f` 已推送；尚未接生产
 - 日期：2026-07-23 JST
 - Vibe 源码基线：`6bccd6974ad7d7a63318bce6c41f0064614404d4`
 - 源码分支：`agent/nlq-quant-engine-poc`
@@ -155,9 +155,14 @@ no-new-privileges、零 capabilities 及容器内 worker snapshot 双检。
 
 ## 后续决策门槛
 
-QE0 仍不接生产。snapshot、WK-01/SE-04 制品与 WK-05/WK-06 容器内核隔离门禁已经关闭，QE0 自动
-G1 证据齐备；本批仍须提交并复核，随后由用户确认是否进入 QE1。任何正式 adapter/部署仍须复用同等
-或更强的只读 mount、无网络、seccomp、no-new-privileges 和不可变镜像约束。
+2026-07-23 JST 在已推送提交 `882da2f` 上完成最终 G1 复核：固定的 QUANTAXIS/vn.py 隔离解释器和
+两个短生命周期硬化容器再次通过 `70 passed in 5.72s`。因此 QE0 正式关闭，但仍不接生产。任何正式
+adapter/部署都必须复用同等或更强的只读 mount、无网络、seccomp、no-new-privileges 和不可变镜像
+约束。
 
 QUANTAXIS 叶子模块实验已证明技术可行，但 qfq/hfq、因子和 QIFI 账户仍按 `port/对照候选` 处理；
 QE2 必须用固定 fixture、公式和真实公司行动窗口验证，不能直接称为正式 adopt。
+
+下一实施批次是 QE1（项目第二阶段）：只建立引擎中立公共契约、research store、不可变 fixture/
+snapshot 和 golden ledger。QE1 可以定义 adapter 输入输出与对照 fixture，但不新增 QUANTAXIS/vn.py
+生产入口；QUANTAXIS 正式基础 adapter 在 QE2 实施，vn.py 独立逐日 oracle 在 QE6 实施。
