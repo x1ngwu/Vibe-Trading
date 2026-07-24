@@ -218,6 +218,33 @@ def test_qe2_tushare_capability_is_raw_only_and_preserves_official_units() -> No
     assert index_units["close"] == "index_point"
 
 
+def test_qe2_strict_fetch_preserves_provider_error_vs_empty_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loader = object.__new__(DataLoader)
+    loader.api = MagicMock()
+    monkeypatch.setattr(
+        "backtest.loaders.tushare.cached_loader_fetch",
+        lambda **kwargs: kwargs["fetch"](),
+    )
+
+    loader.api.daily.side_effect = TimeoutError("provider timeout")
+    with pytest.raises(TimeoutError, match="provider timeout"):
+        loader.fetch_for_envelope(
+            ["600519.SH"],
+            "2025-01-02",
+            "2025-01-03",
+        )
+
+    loader.api.daily.side_effect = None
+    loader.api.daily.return_value = pd.DataFrame()
+    assert loader.fetch_for_envelope(
+        ["600519.SH"],
+        "2025-01-02",
+        "2025-01-03",
+    ) == {}
+
+
 # ---------------------------------------------------------------------------
 # E2E tests (real tushare API — gated behind TUSHARE_TOKEN env var)
 # ---------------------------------------------------------------------------

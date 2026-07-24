@@ -217,6 +217,45 @@ class DataLoader:
         )
         return ohlcv
 
+    def fetch_for_envelope(
+        self,
+        codes: List[str],
+        start_date: str,
+        end_date: str,
+        *,
+        interval: str = "1D",
+        fields: Optional[List[str]] = None,
+    ) -> Dict[str, pd.DataFrame]:
+        """Strict daily fetch used by QE2 so provider exceptions stay visible.
+
+        The legacy ``fetch`` method intentionally isolates per-symbol failures
+        for existing callers.  The strict envelope instead owns fallback and
+        must distinguish an upstream exception from a genuine empty response.
+        """
+
+        validate_date_range(start_date, end_date)
+        if interval != "1D":
+            raise ValueError("QE2 Tushare capability only supports interval='1D'")
+        if fields:
+            raise ValueError("QE2 strict daily fetch does not accept fundamental fields")
+
+        sd = start_date.replace("-", "")
+        ed = end_date.replace("-", "")
+        result: Dict[str, pd.DataFrame] = {}
+        for code in codes:
+            frame = cached_loader_fetch(
+                source=self.name,
+                symbol=code,
+                timeframe="1D",
+                start_date=start_date,
+                end_date=end_date,
+                fields=[],
+                fetch=lambda code=code: self._fetch_daily_frame(code, sd, ed),
+            )
+            if frame is not None and not frame.empty:
+                result[code] = frame
+        return result
+
     def _merge_basic_fields(
         self,
         result: Dict[str, pd.DataFrame],

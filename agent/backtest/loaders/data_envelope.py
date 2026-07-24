@@ -12,7 +12,7 @@ import hashlib
 import os
 import tempfile
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
@@ -25,13 +25,30 @@ DATA_ENVELOPE_SCHEMA = "vibe.data-envelope.v1"
 
 InstrumentType = Literal["stock", "etf", "index"]
 Adjustment = Literal["raw", "qfq", "hfq"]
-OutcomeStatus = Literal["ok", "not_available"]
+OutcomeStatus = Literal["ok", "incomplete", "not_available"]
 AnomalyKind = Literal[
     "duplicate_same",
     "empty_result",
+    "partial_result",
     "provider_error",
     "source_unavailable",
     "unsupported_capability",
+]
+SourceAttemptStatus = Literal[
+    "selected",
+    "unsupported_capability",
+    "source_unavailable",
+    "provider_error",
+    "empty_result",
+    "partial_result",
+]
+AvailabilityClassification = Literal[
+    "weekend",
+    "holiday",
+    "suspension",
+    "true_missing",
+    "not_listed",
+    "delisted",
 ]
 
 
@@ -119,6 +136,75 @@ class DataAnomaly(_StrictModel):
     detail: str
 
 
+class SourceAttempt(_StrictModel):
+    """One source decision for one symbol, including sources never called."""
+
+    symbol: str
+    source: str
+    status: SourceAttemptStatus
+    detail: str
+
+
+class TradingCalendarDay(_StrictModel):
+    trade_date: date
+    is_open: bool
+    reason: Literal["trading_day", "weekend", "holiday"]
+
+    @model_validator(mode="after")
+    def validate_reason(self) -> "TradingCalendarDay":
+        if self.is_open != (self.reason == "trading_day"):
+            raise ValueError("calendar is_open must agree with reason")
+        return self
+
+
+class InstrumentAvailability(_StrictModel):
+    symbol: str
+    listing_date: date
+    delisting_date: date | None = None
+    suspension_dates: tuple[date, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_lifecycle(self) -> "InstrumentAvailability":
+        if self.delisting_date is not None and self.delisting_date < self.listing_date:
+            raise ValueError("delisting_date must not precede listing_date")
+        if len(set(self.suspension_dates)) != len(self.suspension_dates):
+            raise ValueError("suspension_dates must not contain duplicates")
+        return self
+
+
+class DataAvailabilityContext(_StrictModel):
+    """Content-bound calendar and lifecycle facts used to explain absent bars."""
+
+    schema_version: Literal["vibe.data-availability.v1"] = "vibe.data-availability.v1"
+    source: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    version: str = Field(min_length=1, max_length=128)
+    calendar: tuple[TradingCalendarDay, ...]
+    instruments: tuple[InstrumentAvailability, ...]
+
+    @model_validator(mode="after")
+    def validate_uniqueness(self) -> "DataAvailabilityContext":
+        calendar_dates = [item.trade_date for item in self.calendar]
+        symbols = [item.symbol for item in self.instruments]
+        if len(set(calendar_dates)) != len(calendar_dates):
+            raise ValueError("calendar must not contain duplicate dates")
+        if len(set(symbols)) != len(symbols):
+            raise ValueError("instruments must not contain duplicate symbols")
+        return self
+
+    @property
+    def context_sha256(self) -> str:
+        return canonical_sha256(self)
+
+
+class DataAvailabilityObservation(_StrictModel):
+    """A non-trading or unexpectedly absent date for a requested symbol."""
+
+    symbol: str
+    trade_date: date
+    classification: AvailabilityClassification
+    has_bar: bool
+
+
 class SymbolOutcome(_StrictModel):
     symbol: str
     status: OutcomeStatus
@@ -146,6 +232,12 @@ class DataEnvelopeManifest(_StrictModel):
     units: dict[str, dict[str, str]]
     outcomes: tuple[SymbolOutcome, ...]
     anomalies: tuple[DataAnomaly, ...]
+    source_attempts: tuple[SourceAttempt, ...] = ()
+    availability_context_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    availability: tuple[DataAvailabilityObservation, ...] = ()
 
     @model_validator(mode="after")
     def validate_coverage(self) -> "DataEnvelopeManifest":
@@ -156,6 +248,17 @@ class DataEnvelopeManifest(_StrictModel):
             raise ValueError("source_versions must cover every requested source")
         if {item.symbol for item in self.outcomes} != expected:
             raise ValueError("outcomes must cover every requested symbol")
+        _validate_provenance_semantics(
+            symbols=self.symbols,
+            start_date=self.start_date,
+            end_date=self.end_date,
+            requested_sources=self.requested_sources,
+            actual_sources=self.actual_sources,
+            outcomes=self.outcomes,
+            source_attempts=self.source_attempts,
+            availability_context_sha256=self.availability_context_sha256,
+            availability=self.availability,
+        )
         return self
 
 
@@ -169,6 +272,12 @@ class OfflineDataSnapshot(_StrictModel):
     units: dict[str, dict[str, str]]
     outcomes: tuple[SymbolOutcome, ...]
     anomalies: tuple[DataAnomaly, ...]
+    source_attempts: tuple[SourceAttempt, ...] = ()
+    availability_context_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    availability: tuple[DataAvailabilityObservation, ...] = ()
     bars: dict[str, tuple[dict[str, Any], ...]]
 
     @model_validator(mode="after")
@@ -181,7 +290,18 @@ class OfflineDataSnapshot(_StrictModel):
             raise ValueError("offline snapshot provenance does not cover requested symbols")
         if {item.symbol for item in self.outcomes} != expected_symbols:
             raise ValueError("offline snapshot outcomes do not cover requested symbols")
-        successful = {item.symbol for item in self.outcomes if item.status == "ok"}
+        _validate_provenance_semantics(
+            symbols=request.symbols,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            requested_sources=request.requested_sources,
+            actual_sources=self.actual_sources,
+            outcomes=self.outcomes,
+            source_attempts=self.source_attempts,
+            availability_context_sha256=self.availability_context_sha256,
+            availability=self.availability,
+        )
+        successful = {item.symbol for item in self.outcomes if item.status != "not_available"}
         if set(self.bars) != successful:
             raise ValueError("offline snapshot bars must match successful symbol outcomes")
         expected_keys = {"trade_date", *request.fields}
@@ -197,6 +317,50 @@ class OfflineDataSnapshot(_StrictModel):
         return canonical_sha256(self)
 
 
+def _validate_provenance_semantics(
+    *,
+    symbols: tuple[str, ...],
+    start_date: date,
+    end_date: date,
+    requested_sources: tuple[str, ...],
+    actual_sources: Mapping[str, str],
+    outcomes: tuple[SymbolOutcome, ...],
+    source_attempts: tuple[SourceAttempt, ...],
+    availability_context_sha256: str | None,
+    availability: tuple[DataAvailabilityObservation, ...],
+) -> None:
+    expected_symbols = set(symbols)
+    requested = set(requested_sources)
+    if any(
+        item.symbol not in expected_symbols or item.source not in requested
+        for item in source_attempts
+    ):
+        raise ValueError("source_attempts reference an unrequested symbol or source")
+    if availability and availability_context_sha256 is None:
+        raise ValueError("availability observations require a content-bound context")
+    if any(
+        item.symbol not in expected_symbols
+        or item.trade_date < start_date
+        or item.trade_date > end_date
+        for item in availability
+    ):
+        raise ValueError("availability observations fall outside the request")
+
+    true_missing_symbols = {
+        item.symbol for item in availability if item.classification == "true_missing"
+    }
+    incomplete_symbols = {item.symbol for item in outcomes if item.status == "incomplete"}
+    if incomplete_symbols != true_missing_symbols:
+        raise ValueError("incomplete outcomes must match true_missing observations")
+    for outcome in outcomes:
+        actual_source = actual_sources[outcome.symbol]
+        if outcome.status == "not_available":
+            if outcome.actual_source is not None or actual_source != "not_available":
+                raise ValueError("not_available outcomes must not claim an actual source")
+        elif outcome.actual_source is None or actual_source != outcome.actual_source:
+            raise ValueError("successful outcomes must match their actual source")
+
+
 @dataclass(frozen=True)
 class DataEnvelope:
     """Runtime frames plus their strict, JSON-serializable manifest."""
@@ -206,9 +370,19 @@ class DataEnvelope:
     frames: dict[str, pd.DataFrame]
 
     def require_complete(self) -> "DataEnvelope":
-        missing = tuple(item.symbol for item in self.manifest.outcomes if item.status != "ok")
-        if missing:
-            raise IncompleteDataError(f"data envelope is incomplete: symbols={list(missing)}")
+        unavailable = tuple(
+            item.symbol for item in self.manifest.outcomes if item.status == "not_available"
+        )
+        true_missing = tuple(
+            f"{item.symbol}@{item.trade_date.isoformat()}"
+            for item in self.manifest.availability
+            if item.classification == "true_missing"
+        )
+        if unavailable or true_missing:
+            raise IncompleteDataError(
+                "data envelope is incomplete: "
+                f"unavailable_symbols={list(unavailable)}, true_missing={list(true_missing)}"
+            )
         return self
 
     def snapshot_ref(self) -> DataSnapshotRef:
@@ -218,6 +392,10 @@ class DataEnvelope:
         anomaly_tokens = tuple(
             f"{item.kind}:{item.symbol}:{item.source}"
             for item in self.manifest.anomalies
+        ) + tuple(
+            f"{item.classification}:{item.symbol}:{item.trade_date.isoformat()}"
+            for item in self.manifest.availability
+            if item.classification in {"suspension", "true_missing"}
         )
         return DataSnapshotRef(
             snapshot_sha256=self.manifest.snapshot_sha256,
@@ -238,12 +416,17 @@ def fetch_data_envelope(
     *,
     loaders: Mapping[str, Any],
     capabilities: Mapping[str, LoaderCapability],
+    availability_context: DataAvailabilityContext | None = None,
 ) -> DataEnvelope:
     """Fetch each symbol through an explicit fallback chain without shrinking it."""
 
+    if availability_context is not None:
+        _validate_availability_context(request, availability_context)
     frames: dict[str, pd.DataFrame] = {}
     outcomes: list[SymbolOutcome] = []
     anomalies: list[DataAnomaly] = []
+    source_attempts: list[SourceAttempt] = []
+    availability: list[DataAvailabilityObservation] = []
     actual_sources: dict[str, str] = {}
     units: dict[str, dict[str, str]] = {}
     source_versions = {
@@ -256,35 +439,59 @@ def fetch_data_envelope(
         selected_source: str | None = None
         selected_frame: pd.DataFrame | None = None
         selected_units: dict[str, str] | None = None
+        partial_candidate: tuple[
+            str,
+            pd.DataFrame,
+            dict[str, str],
+        ] | None = None
 
         for source in request.requested_sources:
             capability = capabilities.get(source)
             if capability is None or capability.source != source or not capability.supports(request, symbol):
+                detail = "source does not declare the requested instrument/interval/adjustment/fields"
                 anomalies.append(
                     DataAnomaly(
                         kind="unsupported_capability",
                         symbol=symbol,
                         source=source,
-                        detail="source does not declare the requested instrument/interval/adjustment/fields",
+                        detail=detail,
+                    )
+                )
+                source_attempts.append(
+                    SourceAttempt(
+                        symbol=symbol,
+                        source=source,
+                        status="unsupported_capability",
+                        detail=detail,
                     )
                 )
                 continue
             attempted.append(source)
             loader = loaders.get(source)
             if loader is None or getattr(loader, "name", None) != source:
+                detail = "loader instance is unavailable"
                 anomalies.append(
                     DataAnomaly(
                         kind="source_unavailable",
                         symbol=symbol,
                         source=source,
-                        detail="loader instance is unavailable",
+                        detail=detail,
+                    )
+                )
+                source_attempts.append(
+                    SourceAttempt(
+                        symbol=symbol,
+                        source=source,
+                        status="source_unavailable",
+                        detail=detail,
                     )
                 )
                 continue
             try:
                 if hasattr(loader, "is_available") and not loader.is_available():
                     raise _SourceUnavailable("loader reported unavailable")
-                fetched = loader.fetch(
+                fetch_method = getattr(loader, "fetch_for_envelope", loader.fetch)
+                fetched = fetch_method(
                     [symbol],
                     request.start_date.isoformat(),
                     request.end_date.isoformat(),
@@ -292,34 +499,61 @@ def fetch_data_envelope(
                     interval=request.interval,
                 )
             except _SourceUnavailable as exc:
+                detail = str(exc)
                 anomalies.append(
                     DataAnomaly(
                         kind="source_unavailable",
                         symbol=symbol,
                         source=source,
-                        detail=str(exc),
+                        detail=detail,
+                    )
+                )
+                source_attempts.append(
+                    SourceAttempt(
+                        symbol=symbol,
+                        source=source,
+                        status="source_unavailable",
+                        detail=detail,
                     )
                 )
                 continue
             except Exception as exc:  # noqa: BLE001 - provider failure is explicit provenance
+                detail = f"provider raised {type(exc).__name__}"
                 anomalies.append(
                     DataAnomaly(
                         kind="provider_error",
                         symbol=symbol,
                         source=source,
-                        detail=f"provider raised {type(exc).__name__}",
+                        detail=detail,
+                    )
+                )
+                source_attempts.append(
+                    SourceAttempt(
+                        symbol=symbol,
+                        source=source,
+                        status="provider_error",
+                        detail=detail,
                     )
                 )
                 continue
 
             frame = fetched.get(symbol) if isinstance(fetched, Mapping) else None
             if not isinstance(frame, pd.DataFrame) or frame.empty:
+                detail = "provider returned no rows for the requested symbol"
                 anomalies.append(
                     DataAnomaly(
                         kind="empty_result",
                         symbol=symbol,
                         source=source,
-                        detail="provider returned no rows for the requested symbol",
+                        detail=detail,
+                    )
+                )
+                source_attempts.append(
+                    SourceAttempt(
+                        symbol=symbol,
+                        source=source,
+                        status="empty_result",
+                        detail=detail,
                     )
                 )
                 continue
@@ -330,14 +564,59 @@ def fetch_data_envelope(
                 fields=request.fields,
             )
             anomalies.extend(duplicate_anomalies)
-            selected_source = source
-            selected_frame = normalized
-            selected_units = {
+            normalized_units = {
                 field: capability.field_units[request.instrument_types[symbol]][field]
                 for field in request.fields
             }
+            normalized_availability: tuple[DataAvailabilityObservation, ...] = ()
+            if availability_context is not None:
+                normalized_availability = _classify_symbol_availability(
+                    request,
+                    symbol=symbol,
+                    frame=normalized,
+                    context=availability_context,
+                )
+            missing_dates = tuple(
+                item.trade_date.isoformat()
+                for item in normalized_availability
+                if item.classification == "true_missing"
+            )
+            if missing_dates:
+                detail = f"provider omitted expected trading dates: {list(missing_dates)}"
+                anomalies.append(
+                    DataAnomaly(
+                        kind="partial_result",
+                        symbol=symbol,
+                        source=source,
+                        detail=detail,
+                    )
+                )
+                source_attempts.append(
+                    SourceAttempt(
+                        symbol=symbol,
+                        source=source,
+                        status="partial_result",
+                        detail=detail,
+                    )
+                )
+                if partial_candidate is None:
+                    partial_candidate = (source, normalized, normalized_units)
+                continue
+            selected_source = source
+            selected_frame = normalized
+            selected_units = normalized_units
+            source_attempts.append(
+                SourceAttempt(
+                    symbol=symbol,
+                    source=source,
+                    status="selected",
+                    detail=f"selected {len(normalized)} normalized rows",
+                )
+            )
             break
 
+        if selected_source is None and partial_candidate is not None:
+            selected_source, selected_frame, selected_units = partial_candidate
         if selected_source is None or selected_frame is None or selected_units is None:
             actual_sources[symbol] = "not_available"
             units[symbol] = {}
@@ -352,13 +631,25 @@ def fetch_data_envelope(
             )
             continue
 
+        symbol_availability: tuple[DataAvailabilityObservation, ...] = ()
+        if availability_context is not None:
+            symbol_availability = _classify_symbol_availability(
+                request,
+                symbol=symbol,
+                frame=selected_frame,
+                context=availability_context,
+            )
+            availability.extend(symbol_availability)
+        true_missing = any(
+            item.classification == "true_missing" for item in symbol_availability
+        )
         frames[symbol] = selected_frame
         actual_sources[symbol] = selected_source
         units[symbol] = selected_units
         outcomes.append(
             SymbolOutcome(
                 symbol=symbol,
-                status="ok",
+                status="incomplete" if true_missing else "ok",
                 attempted_sources=tuple(attempted),
                 actual_source=selected_source,
                 row_count=len(selected_frame),
@@ -377,6 +668,11 @@ def fetch_data_envelope(
         units=units,
         outcomes=tuple(outcomes),
         anomalies=tuple(anomalies),
+        source_attempts=tuple(source_attempts),
+        availability_context_sha256=(
+            availability_context.context_sha256 if availability_context is not None else None
+        ),
+        availability=tuple(availability),
         bars=bars,
     )
     manifest = DataEnvelopeManifest(
@@ -395,6 +691,9 @@ def fetch_data_envelope(
         units=units,
         outcomes=tuple(outcomes),
         anomalies=tuple(anomalies),
+        source_attempts=tuple(source_attempts),
+        availability_context_sha256=artifact.availability_context_sha256,
+        availability=tuple(availability),
     )
     return DataEnvelope(request=request, manifest=manifest, frames=frames)
 
@@ -417,6 +716,9 @@ def write_offline_snapshot(envelope: DataEnvelope, path: Path) -> OfflineDataSna
         units=envelope.manifest.units,
         outcomes=envelope.manifest.outcomes,
         anomalies=envelope.manifest.anomalies,
+        source_attempts=envelope.manifest.source_attempts,
+        availability_context_sha256=envelope.manifest.availability_context_sha256,
+        availability=envelope.manifest.availability,
         bars=bars,
     )
     if artifact.snapshot_sha256 != envelope.manifest.snapshot_sha256:
@@ -491,6 +793,9 @@ def read_offline_snapshot(path: Path, *, expected_sha256: str) -> DataEnvelope:
         units=artifact.units,
         outcomes=artifact.outcomes,
         anomalies=artifact.anomalies,
+        source_attempts=artifact.source_attempts,
+        availability_context_sha256=artifact.availability_context_sha256,
+        availability=artifact.availability,
     )
     return DataEnvelope(request=request, manifest=manifest, frames=frames)
 
@@ -553,6 +858,98 @@ def normalize_symbol_frame(
                 )
             )
     return normalized.iloc[keep_positions], tuple(anomalies)
+
+
+def _validate_availability_context(
+    request: DataFetchRequest,
+    context: DataAvailabilityContext,
+) -> None:
+    expected_dates = set(_inclusive_dates(request.start_date, request.end_date))
+    calendar = {item.trade_date: item for item in context.calendar}
+    missing_dates = sorted(expected_dates - set(calendar))
+    if missing_dates:
+        raise DataEnvelopeError(
+            "availability context calendar does not cover request dates: "
+            f"{[item.isoformat() for item in missing_dates]}"
+        )
+    instruments = {item.symbol: item for item in context.instruments}
+    missing_symbols = sorted(set(request.symbols) - set(instruments))
+    if missing_symbols:
+        raise DataEnvelopeError(
+            f"availability context does not cover requested symbols: {missing_symbols}"
+        )
+    for symbol in request.symbols:
+        instrument = instruments[symbol]
+        invalid_suspensions = sorted(
+            suspension
+            for suspension in instrument.suspension_dates
+            if suspension in expected_dates and not calendar[suspension].is_open
+        )
+        if invalid_suspensions:
+            raise DataEnvelopeError(
+                f"availability context marks {symbol} suspended on closed dates: "
+                f"{[item.isoformat() for item in invalid_suspensions]}"
+            )
+
+
+def _classify_symbol_availability(
+    request: DataFetchRequest,
+    *,
+    symbol: str,
+    frame: pd.DataFrame,
+    context: DataAvailabilityContext,
+) -> tuple[DataAvailabilityObservation, ...]:
+    calendar = {item.trade_date: item for item in context.calendar}
+    instrument = next(item for item in context.instruments if item.symbol == symbol)
+    bar_dates = {pd.Timestamp(item).date() for item in frame.index}
+    request_dates = set(_inclusive_dates(request.start_date, request.end_date))
+    outside = sorted(bar_dates - request_dates)
+    if outside:
+        raise DataEnvelopeError(
+            f"selected frame for {symbol} contains rows outside the request: "
+            f"{[item.isoformat() for item in outside]}"
+        )
+
+    observations: list[DataAvailabilityObservation] = []
+    suspensions = set(instrument.suspension_dates)
+    for trade_date in sorted(request_dates):
+        day = calendar[trade_date]
+        has_bar = trade_date in bar_dates
+        classification: AvailabilityClassification | None = None
+        if not day.is_open:
+            classification = day.reason
+        elif trade_date < instrument.listing_date:
+            classification = "not_listed"
+        elif instrument.delisting_date is not None and trade_date > instrument.delisting_date:
+            classification = "delisted"
+        elif trade_date in suspensions:
+            classification = "suspension"
+        elif not has_bar:
+            classification = "true_missing"
+
+        if classification is None:
+            continue
+        if has_bar and classification in {"weekend", "holiday", "not_listed", "delisted"}:
+            raise DataEnvelopeError(
+                f"selected frame for {symbol} has a bar on {classification} date "
+                f"{trade_date.isoformat()}"
+            )
+        observations.append(
+            DataAvailabilityObservation(
+                symbol=symbol,
+                trade_date=trade_date,
+                classification=classification,
+                has_bar=has_bar,
+            )
+        )
+    return tuple(observations)
+
+
+def _inclusive_dates(start_date: date, end_date: date) -> tuple[date, ...]:
+    return tuple(
+        start_date + timedelta(days=offset)
+        for offset in range((end_date - start_date).days + 1)
+    )
 
 
 def make_downstream_cache_key(
