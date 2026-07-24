@@ -1,4 +1,4 @@
-"""QUANTAXIS direct-integration worker for the QE0 PoC only."""
+"""Pinned, offline QUANTAXIS worker for the QE0 PoC and QE2 base operations."""
 
 from __future__ import annotations
 
@@ -10,9 +10,11 @@ import sys
 from types import ModuleType
 from typing import Any, Mapping
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 
 from worker_runtime import WorkerError, run_worker  # noqa: E402
+from formal_operations import build_formal_handlers  # noqa: E402
 
 
 ENGINE_NAME = "quantaxis"
@@ -120,6 +122,46 @@ def _verify_installation() -> tuple[Path, str, dict[str, str]]:
     return root, installed_version, actual
 
 
+def _load_quantaxis_base_boundary() -> dict[str, Any]:
+    """Load only the audited leaves executed by the QE2 base operations."""
+
+    root, installed_version, source_sha256 = _verify_installation()
+    for name, relative in (
+        ("QUANTAXIS", "."),
+        ("QUANTAXIS.QAUtil", "QAUtil"),
+        ("QUANTAXIS.QAData", "QAData"),
+        ("QUANTAXIS.QAIndicator", "QAIndicator"),
+    ):
+        _namespace(name, root / relative)
+
+    parameters = _load_source(
+        "QUANTAXIS.QAUtil.QAParameter", root / "QAUtil" / "QAParameter.py"
+    )
+    util = sys.modules["QUANTAXIS.QAUtil"]
+    util.DATABASE = None
+    util.QA_util_log_info = lambda *args, **kwargs: None
+    data_fq = _load_source("QUANTAXIS.QAData.data_fq", root / "QAData" / "data_fq.py")
+    indicator_base = _load_source(
+        "QUANTAXIS.QAIndicator.base", root / "QAIndicator" / "base.py"
+    )
+    indicators = _load_source(
+        "QUANTAXIS.QAIndicator.indicators", root / "QAIndicator" / "indicators.py"
+    )
+    calendar = _load_source(
+        "QUANTAXIS.QAUtil.QADate_trade", root / "QAUtil" / "QADate_trade.py"
+    )
+    executed = ("data_fq", "indicator_base", "indicators", "calendar", "parameters")
+    return {
+        "version": installed_version,
+        "data_fq": data_fq,
+        "indicators": indicators,
+        "indicator_base": indicator_base,
+        "calendar": calendar,
+        "parameters": parameters,
+        "source_sha256": {name: source_sha256[name] for name in executed},
+    }
+
+
 def _load_quantaxis_boundary() -> dict[str, Any]:
     """Load the smallest useful QUANTAXIS leaves from the pinned distribution.
 
@@ -207,9 +249,12 @@ def capabilities(payload: Mapping[str, Any], snapshot: Mapping[str, Any] | None)
             "capabilities": "poc",
             "security_probe": "poc",
             "direct_smoke": "poc",
-            "adjust_prices": "not_available_until_qe2",
-            "trading_calendar": "not_available_until_qe2",
-            "compute_factors": "not_available_until_qe2",
+            "adjust_prices": "qe2",
+            "trading_calendar": "qe2",
+            "compute_factors": {
+                "status": "qe2",
+                "whitelist": ["ma", "ema"],
+            },
             "backtest": "not_available_until_qe5",
             "normalize_ledger": "not_available_until_qe5",
         },
@@ -306,6 +351,10 @@ if __name__ == "__main__":
         run_worker(
             engine_name=ENGINE_NAME,
             engine_commit=ENGINE_COMMIT,
-            handlers={"capabilities": capabilities, "direct_smoke": direct_smoke},
+            handlers={
+                "capabilities": capabilities,
+                "direct_smoke": direct_smoke,
+                **build_formal_handlers(_load_quantaxis_base_boundary),
+            },
         )
     )

@@ -16,6 +16,12 @@ from .protocol import (
     validate_request,
     validate_response,
 )
+from .quantaxis_adapter import (
+    QUANTAXIS_ENGINE_COMMIT,
+    QuantaxisAdapter,
+    QuantaxisFactorSpec,
+    QuantaxisOperationError,
+)
 from .runner import RunResult, WorkerConfig, WorkerExecutionError, WorkerRunner, compute_snapshot_sha256
 
 __all__ = [
@@ -23,6 +29,10 @@ __all__ = [
     "SCHEMA_VERSION",
     "EngineIdentity",
     "ProtocolError",
+    "QUANTAXIS_ENGINE_COMMIT",
+    "QuantaxisAdapter",
+    "QuantaxisFactorSpec",
+    "QuantaxisOperationError",
     "RunResult",
     "WorkerConfig",
     "WorkerExecutionError",

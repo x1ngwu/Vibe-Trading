@@ -302,3 +302,10 @@ def test_capabilities_advertise_operations_only_after_provenance_passes(
         assert result["engine_version"] == worker.EXPECTED_ENGINE_VERSION
         assert result["source_sha256"] == worker.EXPECTED_SOURCE_SHA256
         assert result["operations"]["direct_smoke"] == "poc"
+        if engine == "quantaxis":
+            assert result["operations"]["adjust_prices"] == "qe2"
+            assert result["operations"]["trading_calendar"] == "qe2"
+            assert result["operations"]["compute_factors"] == {
+                "status": "qe2",
+                "whitelist": ["ma", "ema"],
+            }

@@ -166,3 +166,25 @@ QE2 必须用固定 fixture、公式和真实公司行动窗口验证，不能�
 下一实施批次是 QE1（项目第二阶段）：只建立引擎中立公共契约、research store、不可变 fixture/
 snapshot 和 golden ledger。QE1 可以定义 adapter 输入输出与对照 fixture，但不新增 QUANTAXIS/vn.py
 生产入口；QUANTAXIS 正式基础 adapter 在 QE2 实施，vn.py 独立逐日 oracle 在 QE6 实施。
+
+## 2026-07-24 QE2 第四切片附录
+
+QUANTAXIS 基础 adapter 现提供三个正式、白名单 operation，但仍不注册生产 runner：
+
+- `adjust_prices` 只接受 qfq/hfq 和 `vibe.quantaxis-operation-snapshot.v1`。固定
+  `QAData.data_fq` 计算 OHLC，Vibe 按同一 snapshot 的公司行动股数倍率执行首/末日 volume 锚定，
+  amount 永不调整；公司行动必须在 `as_of` 已知并落在 snapshot bar 日期。
+- `trading_calendar` 的真值始终来自内容绑定 snapshot。固定 `trade_date_sse` 只作 oracle 并显式输出
+  mismatch；冻结窗口证明其把 2026-05-04/05 错列为开放日，而 adapter 正确保留 snapshot 的休市事实。
+- `compute_factors` 首批只白名单 raw close 上的 MA/EMA，window 限制为 2–512、请求去重；NaN 在协议
+  边界规范化为 `null`，同一 snapshot 重放结果一致。
+
+正式 operation 的执行闭包进一步缩为 `QAData.data_fq`、`QAIndicator.base/indicators`、
+`QAUtil.QADate_trade/QAParameter` 五个已校验叶子；不会加载 QIFI、QAMarket、Fetch、DB、Web 或顶层包。
+主进程 `QuantaxisAdapter` 固定精确 commit，并将每个结果绑定输入 snapshot SHA-256。真实现金+转增窗口
+`301336.SZ` 的 qfq 价格、qfq/hfq volume 锚点、amount 不变、MA/EMA 与日历差异均在固定 Python 3.11 /
+QUANTAXIS 2.1.0a2 环境通过。
+
+第四切片组合门禁为 `204 passed, 7 skipped in 9.61s`；脱敏占位 Tushare 环境的完整后端为
+`5441 passed, 12 skipped, 20 warnings in 180.50s`。这只关闭 QUANTAXIS 基础 operation，不改变
+QE0 的 QIFI `port/对照候选` 结论，也不代表生产 runner 已切换；后者属于 QE2 第五切片。

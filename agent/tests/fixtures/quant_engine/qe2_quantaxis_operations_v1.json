@@ -1,0 +1,17 @@
+{
+  "schema_version": "vibe.quantaxis-operation-snapshot.v1",
+  "symbol": "301336.SZ",
+  "as_of": "2026-06-01",
+  "bars": [
+    {"trade_date": "2026-05-27", "open": 51.80, "high": 52.60, "low": 51.50, "close": 52.18, "volume": 10895, "amount": 56929.386},
+    {"trade_date": "2026-05-28", "open": 52.30, "high": 52.80, "low": 51.90, "close": 52.22, "volume": 6176, "amount": 32269.275},
+    {"trade_date": "2026-05-29", "open": 40.10, "high": 40.70, "low": 39.80, "close": 40.28, "volume": 11727, "amount": 46374.774},
+    {"trade_date": "2026-06-01", "open": 40.35, "high": 41.50, "low": 40.20, "close": 41.20, "volume": 20798, "amount": 85720.907}
+  ],
+  "corporate_actions": [
+    {"ex_date": "2026-05-29", "known_at": "2026-05-22T18:00:00+08:00", "category": 1, "fenhong": 2.490032, "peigu": 0, "peigujia": 0, "songzhuangu": 2.976135}
+  ],
+  "calendar": [
+    {"trade_date": "2026-05-01", "is_open": false, "reason": "holiday"}, {"trade_date": "2026-05-02", "is_open": false, "reason": "weekend"}, {"trade_date": "2026-05-03", "is_open": false, "reason": "weekend"}, {"trade_date": "2026-05-04", "is_open": false, "reason": "holiday"}, {"trade_date": "2026-05-05", "is_open": false, "reason": "holiday"}, {"trade_date": "2026-05-06", "is_open": true, "reason": "trading_day"}
+  ]
+}
