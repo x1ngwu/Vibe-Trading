@@ -268,11 +268,14 @@ def test_dt07_a_share_fallback_chain_has_an_explicit_fail_closed_decision() -> N
         "tushare",
         "local",
     )
-    assert qe2_a_share_capabilities() == {"tushare": decisions["tushare"].capability}
+    assert qe2_a_share_capabilities() == {
+        "akshare": decisions["akshare"].capability,
+        "tushare": decisions["tushare"].capability,
+    }
     assert all(
         decisions[source].blocked_reason
         for source in decisions
-        if source != "tushare"
+        if source not in {"akshare", "tushare"}
     )
 
     loaders = {
@@ -294,11 +297,10 @@ def test_dt07_a_share_fallback_chain_has_an_explicit_fail_closed_decision() -> N
         capabilities=qe2_a_share_capabilities(),
     ).require_complete()
 
-    assert envelope.manifest.actual_sources == {"600001.SH": "tushare"}
-    assert all(loaders[source].calls == [] for source in decisions if source != "tushare")
-    assert loaders["tushare"].calls == ["600001.SH"]
+    assert envelope.manifest.actual_sources == {"600001.SH": "akshare"}
+    assert all(loaders[source].calls == [] for source in decisions if source != "akshare")
+    assert loaders["akshare"].calls == ["600001.SH"]
     assert [item.status for item in envelope.manifest.source_attempts] == [
-        "unsupported_capability",
         "unsupported_capability",
         "unsupported_capability",
         "unsupported_capability",

@@ -13,6 +13,7 @@ import pandas as pd
 
 from backtest.loaders._symbol_utils import _is_etf_listed
 from backtest.loaders.base import cached_loader_fetch, validate_date_range
+from backtest.loaders.data_envelope import LoaderCapability
 from backtest.loaders.registry import register
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,25 @@ _INTERVAL_MAP_DAILY = {
     "1W": "weekly",
     "1M": "monthly",
 }
+
+# ``stock_zh_a_hist(adjust="")`` returns unadjusted A-share daily bars. Its
+# volume is lots (手) and amount is CNY; the strict adapter converts amount to
+# CNY thousands so fallback units match the Tushare raw contract.
+QE2_A_SHARE_DAILY_RAW_CAPABILITY = LoaderCapability(
+    source="akshare",
+    version="akshare-a-share-daily-raw-v1",
+    instrument_types=("stock",),
+    intervals=("1D",),
+    adjustments=("raw",),
+    fields=("open", "high", "low", "close", "volume", "amount"),
+    field_units={
+        "stock": {
+            "open": "CNY/share", "high": "CNY/share",
+            "low": "CNY/share", "close": "CNY/share",
+            "volume": "lot_100_shares", "amount": "CNY_1000",
+        },
+    },
+)
 
 
 def _is_a_share(code: str) -> bool:
@@ -117,6 +137,60 @@ class DataLoader:
                 logger.warning("akshare failed for %s: %s", code, exc)
         return result
 
+
+    def fetch_for_envelope(
+        self,
+        codes: List[str],
+        start_date: str,
+        end_date: str,
+        *,
+        interval: str = "1D",
+        fields: Optional[List[str]] = None,
+    ) -> Dict[str, pd.DataFrame]:
+        """Strict raw A-share fetch; provider exceptions remain visible."""
+
+        validate_date_range(start_date, end_date)
+        if interval != "1D":
+            raise ValueError("QE2 AKShare capability only supports interval='1D'")
+        if fields:
+            raise ValueError("QE2 strict daily fetch does not accept extra fields")
+
+        import akshare as ak
+
+        result: Dict[str, pd.DataFrame] = {}
+        for code in codes:
+            if not _is_a_share(code) or _is_etf_listed(code):
+                raise ValueError(f"QE2 AKShare raw capability does not support {code}")
+            frame = cached_loader_fetch(
+                source=self.name,
+                symbol=code,
+                timeframe="1D",
+                start_date=start_date,
+                end_date=end_date,
+                fields=["__qe2_raw_ohlcva_v1"],
+                fetch=lambda code=code: self._fetch_a_share_raw(
+                    ak, code, start_date, end_date
+                ),
+            )
+            if frame is not None and not frame.empty:
+                result[code] = frame
+        return result
+
+    def _fetch_a_share_raw(
+        self, ak, code: str, start_date: str, end_date: str,
+    ) -> Optional[pd.DataFrame]:
+        df = ak.stock_zh_a_hist(
+            symbol=code.split(".")[0],
+            period="daily",
+            start_date=start_date.replace("-", ""),
+            end_date=end_date.replace("-", ""),
+            adjust="",
+        )
+        if df is None or df.empty:
+            return None
+        normalized = self._normalize(df, date_col="日期", include_amount=True)
+        normalized["amount"] = normalized["amount"] / 1000.0
+        return normalized
     def _fetch_one(
         self, code: str, start_date: str, end_date: str, interval: str,
     ) -> Optional[pd.DataFrame]:
@@ -234,13 +308,15 @@ class DataLoader:
         return self._normalize(df, date_col="日期")
 
     @staticmethod
-    def _normalize(df: pd.DataFrame, date_col: str = "日期") -> pd.DataFrame:
+    def _normalize(
+        df: pd.DataFrame, date_col: str = "日期", *, include_amount: bool = False,
+    ) -> pd.DataFrame:
         """Normalize AKShare DataFrame to standard OHLCV schema.
 
         AKShare Chinese column names: 日期, 开盘, 最高, 最低, 收盘, 成交量
         AKShare English column names: date, open, high, low, close, volume
         """
-        col_map_cn = {"开盘": "open", "最高": "high", "最低": "low", "收盘": "close", "成交量": "volume"}
+        col_map_cn = {"开盘": "open", "最高": "high", "最低": "low", "收盘": "close", "成交量": "volume", "成交额": "amount"}
         col_map_en = {"date": "trade_date", "open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume"}
 
         if date_col in df.columns:
@@ -257,11 +333,16 @@ class DataLoader:
         df["trade_date"] = pd.to_datetime(df["trade_date"])
         df = df.set_index("trade_date").sort_index()
 
-        for col in ["open", "high", "low", "close", "volume"]:
+        for col in ["open", "high", "low", "close", "volume", "amount"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
 
-        ohlcv_cols = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
+        fields = ["open", "high", "low", "close", "volume"]
+        if include_amount:
+            if "amount" not in df.columns:
+                raise ValueError("AKShare raw A-share response omitted amount")
+            fields.append("amount")
+        ohlcv_cols = [c for c in fields if c in df.columns]
         df = df[ohlcv_cols].dropna(subset=["open", "high", "low", "close"])
         if "volume" not in df.columns:
             df["volume"] = 0.0

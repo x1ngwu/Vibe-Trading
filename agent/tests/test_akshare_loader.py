@@ -17,6 +17,7 @@ import pytest
 
 from backtest.loaders.akshare_loader import (
     DataLoader,
+    QE2_A_SHARE_DAILY_RAW_CAPABILITY,
     _is_a_share,
     _is_etf_listed,
     _is_forex,
@@ -109,6 +110,7 @@ def _stub_a_share_response() -> pd.DataFrame:
         "最低": [1690.0],
         "收盘": [1710.0],
         "成交量": [100000],
+        "成交额": [171_000_000.0],
     })
 
 
@@ -170,3 +172,45 @@ class TestRouting:
         fake_akshare.stock_zh_a_hist.assert_called_once()
         fake_akshare.fund_etf_hist_sina.assert_not_called()
         fake_akshare.forex_hist_em.assert_not_called()
+
+
+def test_qe2_strict_raw_fetch_preserves_amount_and_uses_distinct_cache_contract(
+    fake_akshare: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    def passthrough(**kwargs):
+        calls.append(kwargs)
+        return kwargs["fetch"]()
+
+    monkeypatch.setattr("backtest.loaders.akshare_loader.cached_loader_fetch", passthrough)
+    loader = DataLoader()
+    frame = loader.fetch_for_envelope(
+        ["600519.SH"], "2024-01-01", "2024-01-03"
+    )["600519.SH"]
+
+    fake_akshare.stock_zh_a_hist.assert_called_once_with(
+        symbol="600519", period="daily", start_date="20240101",
+        end_date="20240103", adjust="",
+    )
+    assert list(frame.columns) == ["open", "high", "low", "close", "volume", "amount"]
+    assert frame.iloc[0]["amount"] == pytest.approx(171_000.0)
+    assert calls[0]["fields"] == ["__qe2_raw_ohlcva_v1"]
+    assert QE2_A_SHARE_DAILY_RAW_CAPABILITY.adjustments == ("raw",)
+    assert QE2_A_SHARE_DAILY_RAW_CAPABILITY.field_units["stock"]["amount"] == "CNY_1000"
+
+
+def test_qe2_strict_raw_fetch_does_not_swallow_provider_error(
+    fake_akshare: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "backtest.loaders.akshare_loader.cached_loader_fetch",
+        lambda **kwargs: kwargs["fetch"](),
+    )
+    fake_akshare.stock_zh_a_hist.side_effect = TimeoutError("provider timeout")
+    with pytest.raises(TimeoutError, match="provider timeout"):
+        DataLoader().fetch_for_envelope(
+            ["600519.SH"], "2024-01-01", "2024-01-03"
+        )

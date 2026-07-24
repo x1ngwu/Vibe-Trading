@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from backtest.loaders.akshare_loader import QE2_A_SHARE_DAILY_RAW_CAPABILITY
 from backtest.loaders.data_envelope import LoaderCapability
 from backtest.loaders.registry import FALLBACK_CHAINS
 from backtest.loaders.tushare import QE2_DAILY_CAPABILITY
@@ -55,8 +56,8 @@ A_SHARE_QE2_CAPABILITY_DECISIONS: tuple[AShareCapabilityDecision, ...] = (
     ),
     AShareCapabilityDecision(
         source="akshare",
-        capability=None,
-        blocked_reason="stock path hard-codes qfq, ETF semantics differ, and amount is omitted",
+        capability=QE2_A_SHARE_DAILY_RAW_CAPABILITY,
+        blocked_reason=None,
     ),
     AShareCapabilityDecision(
         source="tushare",

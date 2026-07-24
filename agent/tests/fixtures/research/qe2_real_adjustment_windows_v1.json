@@ -1,0 +1,37 @@
+{
+  "schema_version": "vibe.real-adjustment-windows.v1",
+  "fetched_at": "2026-07-24T19:00:00+09:00",
+  "bar_source": "AKShare stock_zh_a_hist",
+  "windows": [
+    {
+      "symbol": "002008.SZ",
+      "kind": "cash_dividend",
+      "announcement_url": "https://static.cninfo.com.cn/finalpage/2025-05-15/1223543498.PDF",
+      "record_date": "2025-05-20",
+      "ex_date": "2025-05-21",
+      "effective_cash_per_share": 0.3424858,
+      "effective_share_multiplier": 1.0,
+      "bars": [
+        {"trade_date": "2025-05-19", "raw_close": 24.21, "volume": 257598, "amount_cny": 630056905.22, "provider_qfq_close": 23.67, "provider_hfq_close": 222.08},
+        {"trade_date": "2025-05-20", "raw_close": 24.16, "volume": 216667, "amount_cny": 517204691.57, "provider_qfq_close": 23.62, "provider_hfq_close": 221.67},
+        {"trade_date": "2025-05-21", "raw_close": 23.82, "volume": 118465, "amount_cny": 281994737.75, "provider_qfq_close": 23.62, "provider_hfq_close": 221.69},
+        {"trade_date": "2025-05-22", "raw_close": 23.57, "volume": 116294, "amount_cny": 275985739.30, "provider_qfq_close": 23.37, "provider_hfq_close": 219.67}
+      ]
+    },
+    {
+      "symbol": "301336.SZ",
+      "kind": "cash_dividend_and_capitalization",
+      "announcement_url": "https://static.cninfo.com.cn/finalpage/2026-05-22/1225327468.PDF",
+      "record_date": "2026-05-28",
+      "ex_date": "2026-05-29",
+      "effective_cash_per_share": 0.2490032,
+      "effective_share_multiplier": 1.2976135,
+      "bars": [
+        {"trade_date": "2026-05-27", "raw_close": 52.18, "volume": 10895, "amount_cny": 56929386.0, "provider_qfq_close": 40.02, "provider_hfq_close": 52.82},
+        {"trade_date": "2026-05-28", "raw_close": 52.22, "volume": 6176, "amount_cny": 32269275.0, "provider_qfq_close": 40.05, "provider_hfq_close": 52.86},
+        {"trade_date": "2026-05-29", "raw_close": 40.28, "volume": 11727, "amount_cny": 46374774.0, "provider_qfq_close": 40.28, "provider_hfq_close": 53.16},
+        {"trade_date": "2026-06-01", "raw_close": 41.20, "volume": 20798, "amount_cny": 85720907.0, "provider_qfq_close": 41.20, "provider_hfq_close": 54.35}
+      ]
+    }
+  ]
+}
