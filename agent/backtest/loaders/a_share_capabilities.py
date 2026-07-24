@@ -32,6 +32,12 @@ class AShareCapabilityDecision:
     def enabled(self) -> bool:
         return self.capability is not None
 
+    @property
+    def decision(self) -> str:
+        """Final QE2 strict-path decision; legacy registry availability is separate."""
+
+        return "adopt" if self.enabled else "drop"
+
 
 A_SHARE_QE2_CAPABILITY_DECISIONS: tuple[AShareCapabilityDecision, ...] = (
     AShareCapabilityDecision(
@@ -70,6 +76,30 @@ A_SHARE_QE2_CAPABILITY_DECISIONS: tuple[AShareCapabilityDecision, ...] = (
         blocked_reason="user-defined local schemas do not yet carry adjustment and unit declarations",
     ),
 )
+
+
+AKSHARE_QE2_INSTRUMENT_DECISIONS: dict[str, tuple[str, str | None]] = {
+    "stock": ("adopt", None),
+    "etf": (
+        "drop",
+        "AKShare ETF path has no reviewed strict raw OHLCVA adapter/unit contract",
+    ),
+    "index": (
+        "drop",
+        "AKShare index path has no reviewed strict raw OHLCVA adapter/unit contract",
+    ),
+}
+
+
+def qe2_a_share_drop_decisions() -> dict[str, str]:
+    """Return final source drops from the QE2 strict path with review rationale."""
+
+    _validate_decision_coverage()
+    return {
+        item.source: str(item.blocked_reason)
+        for item in A_SHARE_QE2_CAPABILITY_DECISIONS
+        if item.decision == "drop"
+    }
 
 
 def qe2_a_share_capabilities() -> dict[str, LoaderCapability]:

@@ -19,6 +19,8 @@ BACKTEST_SUMMARY_KEYS = (
     "engine",
     "initial_cash",
     "source",
+    "adjustment",
+    "data_contract",
 )
 
 
@@ -70,6 +72,10 @@ def write_run_card(
         "warnings": list(warnings or []),
         "artifacts": _list_artifacts(run_dir),
     }
+    data_provenance = config.get("_run_card_data_provenance")
+    if isinstance(data_provenance, Mapping):
+        card["data_provenance"] = _json_safe(data_provenance)
+
     normalized_refs = _normalize_artifact_refs(artifact_refs)
     if normalized_refs:
         card["artifact_refs"] = normalized_refs
@@ -203,6 +209,17 @@ def _render_markdown(card: Mapping[str, Any]) -> str:
     lines.extend(["", "## Data Sources"])
     data_sources = card.get("data_sources", [])
     lines.extend(f"- {source}" for source in data_sources) if data_sources else lines.append("- None recorded.")
+
+    data_provenance = card.get("data_provenance")
+    if isinstance(data_provenance, Mapping):
+        lines.extend(["", "## Data Provenance"])
+        for key in (
+            "snapshot_sha256", "adjustment", "interval", "start_date", "end_date"
+        ):
+            if key in data_provenance:
+                lines.append(f"- {key}: `{data_provenance[key]}`")
+        for symbol, source in data_provenance.get("actual_sources", {}).items():
+            lines.append(f"- actual_source[{symbol}]: `{source}`")
 
     lines.extend(["", "## Metrics"])
     metric_values = card.get("metrics", {})

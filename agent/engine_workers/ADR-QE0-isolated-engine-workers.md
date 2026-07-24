@@ -188,3 +188,29 @@ QUANTAXIS 2.1.0a2 环境通过。
 第四切片组合门禁为 `204 passed, 7 skipped in 9.61s`；脱敏占位 Tushare 环境的完整后端为
 `5441 passed, 12 skipped, 20 warnings in 180.50s`。这只关闭 QUANTAXIS 基础 operation，不改变
 QE0 的 QIFI `port/对照候选` 结论，也不代表生产 runner 已切换；后者属于 QE2 第五切片。
+
+## 2026-07-24 QE2 第五切片附录
+
+生产 runner 现增加显式 opt-in 的 `data_contract=qe2_snapshot`。该路径只读取 run directory 内
+内容绑定的 `OfflineDataSnapshot`，要求相对路径无 `..`/symlink、精确 SHA-256、完整 outcome、证券
+及顺序、区间、频率、复权方式和字段均与运行配置一致；任何不匹配都失败关闭。严格路径禁止在线
+fundamental/event enrichment 和外部 benchmark，也不会构造或调用 provider。
+
+这是一条两阶段离线物化边界：QUANTAXIS adapter 可在受控 worker 中产生或验证带固定
+`source_versions` 的数据结果，生产 runner 消费 canonical snapshot；runner 本身不直接加载
+QUANTAXIS，也不把 worker 依赖加入主环境。旧 `legacy` 路径保持兼容，但只能把未验证复权记为
+`provider_default_unverified`，不能宣称满足 QE2 snapshot 契约。
+
+run card 现保存 snapshot/request hash、复权、频率、区间、逐证券实际 source、source version、单位和
+availability context hash。旧 `source=auto` 路径在首选空结果后由 fallback 成功时，也记录真正返回
+数据的 source，不再用路由推断值代替事实。
+
+严格生产重放覆盖 DT-05：修改请求区间之后的 provider 状态不会触发联网，也不改变既有
+data provenance、metrics 或 equity artifact；只有被选择的 snapshot 内容修订才改变 identity。
+AKShare strict capability 最终只 adopt 股票 raw；ETF/指数因没有经审查的 raw OHLCVA/单位契约而
+drop。Tencent、Mootdx、Eastmoney、BaoStock 和 local 同样从 QE2 strict path drop；旧 registry
+兼容性不受影响。
+
+第五切片定向测试为 `7 passed in 2.61s`；QE2/QE0/QE1 与生产 runner/run-card 组合门禁为
+`284 passed, 7 skipped in 14.39s`；脱敏占位 Tushare 环境完整后端为
+`5448 passed, 12 skipped, 20 warnings in 180.19s`。QE2 五个切片和 G1 至此关闭；生产部署仍未切换。

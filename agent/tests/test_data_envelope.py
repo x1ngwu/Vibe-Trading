@@ -13,7 +13,9 @@ import pandas as pd
 import pytest
 
 from backtest.loaders.a_share_capabilities import (
+    AKSHARE_QE2_INSTRUMENT_DECISIONS,
     A_SHARE_QE2_CAPABILITY_DECISIONS,
+    qe2_a_share_drop_decisions,
     qe2_a_share_capabilities,
 )
 from backtest.loaders.data_envelope import (
@@ -277,6 +279,19 @@ def test_dt07_a_share_fallback_chain_has_an_explicit_fail_closed_decision() -> N
         for source in decisions
         if source not in {"akshare", "tushare"}
     )
+    assert {source: item.decision for source, item in decisions.items()} == {
+        "tencent": "drop", "mootdx": "drop", "eastmoney": "drop",
+        "baostock": "drop", "akshare": "adopt", "tushare": "adopt",
+        "local": "drop",
+    }
+    assert set(qe2_a_share_drop_decisions()) == {
+        "tencent", "mootdx", "eastmoney", "baostock", "local"
+    }
+    assert AKSHARE_QE2_INSTRUMENT_DECISIONS == {
+        "stock": ("adopt", None),
+        "etf": ("drop", "AKShare ETF path has no reviewed strict raw OHLCVA adapter/unit contract"),
+        "index": ("drop", "AKShare index path has no reviewed strict raw OHLCVA adapter/unit contract"),
+    }
 
     loaders = {
         source: _FakeLoader(source, {"600001.SH": _frame(10.8)})

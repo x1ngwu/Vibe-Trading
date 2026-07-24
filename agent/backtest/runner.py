@@ -14,10 +14,10 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Literal, Optional
 
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, model_validator, field_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
 try:
     from dotenv import load_dotenv
@@ -52,6 +52,15 @@ _PRICE_PANEL_COLUMNS = ("open", "high", "low", "close", "volume", "vwap", "amoun
 _FUND_PREFIX = "fund:"
 
 
+class OfflineSnapshotConfig(BaseModel):
+    """Explicit content-bound snapshot selected for an offline production run."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    path: str = Field(min_length=1, max_length=255)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class BacktestConfigSchema(BaseModel):
     """Validates backtest config.json before execution."""
 
@@ -63,6 +72,9 @@ class BacktestConfigSchema(BaseModel):
     source: str = "tushare"
     interval: str = "1D"
     engine: str = "daily"
+    data_contract: Literal["legacy", "qe2_snapshot"] = "legacy"
+    adjustment: Optional[Literal["raw", "qfq", "hfq"]] = None
+    data_snapshot: Optional[OfflineSnapshotConfig] = None
     fundamental_fields: Optional[Dict[str, List[str]]] = None
     event_feeds: Optional[List[Dict[str, Any]]] = None
 
@@ -141,6 +153,24 @@ class BacktestConfigSchema(BaseModel):
             raise ValueError(
                 f"start_date ({self.start_date}) must be <= end_date ({self.end_date})"
             )
+        if self.data_contract == "qe2_snapshot" and self.data_snapshot is None:
+            raise ValueError("qe2_snapshot data_contract requires data_snapshot")
+        if self.data_contract == "legacy" and self.data_snapshot is not None:
+            raise ValueError(
+                "data_snapshot requires data_contract=qe2_snapshot"
+            )
+        if self.data_snapshot is not None:
+            if self.adjustment is None:
+                raise ValueError("data_snapshot runs require an explicit adjustment")
+            if self.fundamental_fields or self.event_feeds:
+                raise ValueError(
+                    "data_snapshot runs cannot request online fundamental/event enrichment"
+                )
+            benchmark = getattr(self, "benchmark", None)
+            if benchmark not in {None, "auto"}:
+                raise ValueError(
+                    "data_snapshot runs cannot request an external benchmark"
+                )
         return self
 
 
@@ -803,6 +833,86 @@ def _maybe_inject_fundamentals_for_factor_panel(
     return _project_panel_fields_to_data_map(data_map, panel, fund_columns)
 
 
+def _load_offline_data_snapshot(run_dir: Path, config: dict):
+    """Load and match a QE2 snapshot without constructing any provider loader."""
+
+    from backtest.loaders.data_envelope import DataEnvelopeError, read_offline_snapshot
+
+    spec = OfflineSnapshotConfig.model_validate(config.get("data_snapshot"))
+    relative = Path(spec.path)
+    if relative.is_absolute() or relative in {Path("."), Path("")}:
+        raise DataEnvelopeError("data_snapshot.path must be a non-empty relative path")
+    if ".." in relative.parts:
+        raise DataEnvelopeError("data_snapshot.path must stay inside the run directory")
+    root = run_dir.resolve(strict=True)
+    candidate = root / relative
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise DataEnvelopeError("data_snapshot.path must not contain a symlink")
+    try:
+        snapshot_path = candidate.resolve(strict=True)
+        snapshot_path.relative_to(root)
+    except (OSError, ValueError) as exc:
+        raise DataEnvelopeError("data_snapshot.path must stay inside the run directory") from exc
+
+    envelope = read_offline_snapshot(
+        snapshot_path,
+        expected_sha256=spec.sha256,
+    ).require_complete()
+    request = envelope.request
+    expected_codes = tuple(str(code) for code in config.get("codes", []))
+    if request.symbols != expected_codes:
+        raise DataEnvelopeError("data snapshot symbols/order do not exactly match config.codes")
+    expected_start = pd.Timestamp(config.get("start_date")).date()
+    expected_end = pd.Timestamp(config.get("end_date")).date()
+    if request.start_date != expected_start or request.end_date != expected_end:
+        raise DataEnvelopeError("data snapshot date range does not exactly match config")
+    for symbol, frame in envelope.frames.items():
+        try:
+            dates = {pd.Timestamp(item).date() for item in frame.index}
+        except Exception as exc:
+            raise DataEnvelopeError(f"data snapshot has invalid dates for {symbol}") from exc
+        outside = sorted(
+            item for item in dates if item < expected_start or item > expected_end
+        )
+        if outside:
+            raise DataEnvelopeError(
+                f"data snapshot contains rows outside config range for {symbol}: "
+                f"{[item.isoformat() for item in outside]}"
+            )
+    if request.interval != config.get("interval", "1D"):
+        raise DataEnvelopeError("data snapshot interval does not exactly match config")
+    if config.get("adjustment") is None or request.adjustment != config.get("adjustment"):
+        raise DataEnvelopeError("data snapshot adjustment does not exactly match config")
+    required_fields = {"open", "high", "low", "close", "volume"}
+    required_fields.update(str(item) for item in config.get("extra_fields") or [])
+    missing_fields = sorted(required_fields - set(request.fields))
+    if missing_fields:
+        raise DataEnvelopeError(f"data snapshot is missing required fields: {missing_fields}")
+
+    manifest = envelope.manifest
+    provenance = {
+        "schema_version": "vibe.run-data-provenance.v1",
+        "snapshot_sha256": manifest.snapshot_sha256,
+        "request_sha256": manifest.request_sha256,
+        "adjustment": manifest.adjustment,
+        "interval": manifest.interval,
+        "start_date": manifest.start_date.isoformat(),
+        "end_date": manifest.end_date.isoformat(),
+        "requested_sources": list(manifest.requested_sources),
+        "actual_sources": dict(sorted(manifest.actual_sources.items())),
+        "source_versions": dict(sorted(manifest.source_versions.items())),
+        "units": {
+            symbol: dict(sorted(values.items()))
+            for symbol, values in sorted(manifest.units.items())
+        },
+        "availability_context_sha256": manifest.availability_context_sha256,
+    }
+    return envelope, provenance
+
+
 # --- Main entry ---
 
 def main(run_dir: Path) -> None:
@@ -878,7 +988,20 @@ def main(run_dir: Path) -> None:
     # Data: auto split vs single loader
     interval = config.get("interval", "1D")
 
-    if source == "auto":
+    snapshot_mode = config.get("data_contract", "legacy") == "qe2_snapshot"
+
+    if snapshot_mode:
+        try:
+            envelope, provenance = _load_offline_data_snapshot(run_dir, config)
+        except (OSError, ValueError) as exc:
+            print(json.dumps({"error": f"Invalid data snapshot: {exc}"}))
+            sys.exit(1)
+        data_map = {symbol: frame.copy() for symbol, frame in envelope.frames.items()}
+        config["_run_card_data_provenance"] = provenance
+        config["_run_card_effective_sources"] = sorted(set(provenance["actual_sources"].values()))
+        source = "auto"
+
+    elif source == "auto":
         data_map = _fetch_auto(codes, config, interval)
     else:
         codes = _normalize_codes(codes, source)
@@ -924,12 +1047,27 @@ def main(run_dir: Path) -> None:
     if not data_map:
         print(json.dumps({"error": "No data fetched"}))
         sys.exit(1)
-    data_map = _maybe_inject_fundamentals_for_factor_panel(data_map, config)
+    if not snapshot_mode:
+        data_map = _maybe_inject_fundamentals_for_factor_panel(data_map, config)
 
-    if source == "auto":
-        config["_run_card_effective_sources"] = sorted(_group_codes_by_source(codes))
-    else:
-        config["_run_card_effective_sources"] = [source]
+    if not snapshot_mode:
+        actual_sources = config.get("_run_card_actual_sources", {})
+        if source == "auto" and isinstance(actual_sources, dict) and actual_sources:
+            config["_run_card_effective_sources"] = sorted(set(actual_sources.values()))
+        elif source == "auto":
+            config["_run_card_effective_sources"] = sorted(_group_codes_by_source(codes))
+        else:
+            config["_run_card_effective_sources"] = [source]
+            actual_sources = {code: source for code in data_map}
+        config["_run_card_data_provenance"] = {
+            "schema_version": "vibe.run-data-provenance.v1",
+            "snapshot_sha256": None,
+            "adjustment": config.get("adjustment") or "provider_default_unverified",
+            "interval": interval,
+            "start_date": config.get("start_date"),
+            "end_date": config.get("end_date"),
+            "actual_sources": dict(sorted(actual_sources.items())),
+        }
 
     # Engine
     engine_type = config.get("engine", "daily")
@@ -1067,6 +1205,7 @@ def _fetch_auto(codes: List[str], config: dict, interval: str = "1D") -> dict:
             loader = LoaderCls()
 
         src_name = getattr(loader, "name", "unknown")
+        selected_source = str(src_name)
         normalized_codes = _normalize_codes(market_codes, src_name)
         fields = config.get("extra_fields") if src_name == "tushare" else None
         result = loader.fetch(normalized_codes, start_date, end_date, fields=fields, interval=interval)
@@ -1083,9 +1222,13 @@ def _fetch_auto(codes: List[str], config: dict, interval: str = "1D") -> dict:
                 result = fb_loader.fetch(fb_codes, start_date, end_date, interval=interval)
                 if result:
                     logger.info("Runtime fallback: %s -> %s for %s", src_name, fb_name, market)
+                    selected_source = fb_name
                     break
 
         merged.update(result)
+        actual_sources = config.setdefault("_run_card_actual_sources", {})
+        if isinstance(actual_sources, dict):
+            actual_sources.update({str(code): selected_source for code in result})
 
     return merged
 
