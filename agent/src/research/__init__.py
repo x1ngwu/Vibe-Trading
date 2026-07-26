@@ -1,5 +1,16 @@
 """Versioned, engine-neutral research contracts and persistence helpers."""
 
+from .business_similarity import (
+    BUSINESS_FEATURE_SNAPSHOT_SCHEMA,
+    BusinessFeatureRecord,
+    BusinessFeatureSnapshot,
+    BusinessFieldProvenance,
+    BusinessSimilarityError,
+    build_business_similarity,
+    build_business_similarity_object,
+    build_tushare_business_feature_snapshot,
+    load_business_feature_snapshot,
+)
 from .contracts import (
     BacktestMetrics,
     BacktestRun,
@@ -83,6 +94,11 @@ from .universe_source import (
 __all__ = [
     "BacktestMetrics",
     "BacktestRun",
+    "BUSINESS_FEATURE_SNAPSHOT_SCHEMA",
+    "BusinessFeatureRecord",
+    "BusinessFeatureSnapshot",
+    "BusinessFieldProvenance",
+    "BusinessSimilarityError",
     "ChannelWeights",
     "ContractError",
     "CostSpec",
@@ -136,12 +152,16 @@ __all__ = [
     "UniverseInstrument",
     "UniverseMembership",
     "UniverseSnapshot",
+    "build_business_similarity",
+    "build_business_similarity_object",
+    "build_tushare_business_feature_snapshot",
     "build_peer_set",
     "build_csi300_tushare_source_batch",
     "build_peer_set_object",
     "canonical_json",
     "canonical_sha256",
     "create_research_object",
+    "load_business_feature_snapshot",
     "migrate_research_object",
     "load_csi300_tushare_source_batch",
     "load_market_fixture",
