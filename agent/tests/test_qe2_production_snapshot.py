@@ -146,6 +146,22 @@ def test_snapshot_loader_binds_request_and_returns_complete_provenance(tmp_path:
         _load_offline_data_snapshot(run_dir, {**_config(digest), "data_snapshot": {"path": "data/snapshot.json", "sha256": "0" * 64}})
 
 
+def test_snapshot_loader_rejects_invalid_ohlc_instead_of_silently_dropping_it(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    snapshot = _snapshot_artifact().model_dump(mode="json")
+    snapshot["bars"][SYMBOL][1]["high"] = 9.0
+    path = run_dir / "data" / "snapshot.json"
+    path.parent.mkdir(parents=True)
+    payload = canonical_json(snapshot).encode("utf-8")
+    path.write_bytes(payload)
+    digest = hashlib.sha256(payload).hexdigest()
+
+    with pytest.raises(ValueError, match="violates OHLC invariants on 2025-01-03"):
+        _load_offline_data_snapshot(run_dir, _config(digest))
+
+
 def test_snapshot_path_must_remain_inside_run_directory(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()

@@ -775,7 +775,18 @@ def read_offline_snapshot(path: Path, *, expected_sha256: str) -> DataEnvelope:
         frame = pd.DataFrame(rows)
         frame.index = pd.to_datetime(frame.pop("trade_date"))
         frame.index.name = "trade_date"
-        frames[symbol] = frame.loc[:, list(artifact.request.fields)]
+        original_dates = tuple(frame.index)
+        normalized, anomalies = normalize_symbol_frame(
+            frame,
+            symbol=symbol,
+            source=artifact.actual_sources[symbol],
+            fields=artifact.request.fields,
+        )
+        if anomalies or tuple(normalized.index) != original_dates:
+            raise DataEnvelopeError(
+                f"offline snapshot bars for {symbol} are not canonical"
+            )
+        frames[symbol] = normalized
     request = artifact.request
     manifest = DataEnvelopeManifest(
         request_sha256=request.request_sha256,
@@ -929,7 +940,13 @@ def _classify_symbol_availability(
 
         if classification is None:
             continue
-        if has_bar and classification in {"weekend", "holiday", "not_listed", "delisted"}:
+        if has_bar and classification in {
+            "weekend",
+            "holiday",
+            "suspension",
+            "not_listed",
+            "delisted",
+        }:
             raise DataEnvelopeError(
                 f"selected frame for {symbol} has a bar on {classification} date "
                 f"{trade_date.isoformat()}"

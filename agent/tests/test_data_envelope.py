@@ -454,6 +454,40 @@ def test_dt02_provider_failure_and_empty_result_are_not_relabelled_true_missing(
     assert envelope.manifest.outcomes[0].status == "not_available"
 
 
+def test_dt02_known_suspension_with_bar_fails_closed() -> None:
+    symbol = "600005.SH"
+    request = DataFetchRequest(
+        symbols=(symbol,),
+        instrument_types={symbol: "stock"},
+        start_date="2025-01-01",
+        end_date="2025-01-10",
+        adjustment="raw",
+        fields=_FIELDS,
+        requested_sources=("primary",),
+    )
+    frame = _frame_on_dates(
+        (
+            "2025-01-02",
+            "2025-01-03",
+            "2025-01-06",
+            "2025-01-08",
+            "2025-01-09",
+            "2025-01-10",
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="has a bar on suspension date 2025-01-06",
+    ):
+        fetch_data_envelope(
+            request,
+            loaders={"primary": _FakeLoader("primary", {symbol: frame})},
+            capabilities={"primary": _capability("primary")},
+            availability_context=_availability_context(),
+        )
+
+
 def test_dt02_partial_result_falls_back_before_becoming_incomplete() -> None:
     open_dates = (
         "2025-01-02",
