@@ -1,0 +1,221 @@
+{
+  "schema_version": "vibe.universe-history.v1",
+  "fixture_id": "qe3-csi300-sm01-sm02-v1",
+  "universe_id": "csi300",
+  "index_symbol": "000300.SH",
+  "source": "synthetic_fixture",
+  "source_version": "qe3-sm01-sm02-v1",
+  "cutoff_timezone": "Asia/Shanghai",
+  "instruments": [
+    {
+      "security_id": "CN600519",
+      "symbol": "600519.SH",
+      "instrument_type": "stock",
+      "listing_date": "2001-08-27",
+      "delisting_date": null,
+      "primary_listing": true,
+      "known_at": "2001-08-20T09:00:00+08:00"
+    },
+    {
+      "security_id": "CN000858",
+      "symbol": "000858.SZ",
+      "instrument_type": "stock",
+      "listing_date": "1998-04-27",
+      "delisting_date": null,
+      "primary_listing": true,
+      "known_at": "1998-04-20T09:00:00+08:00"
+    },
+    {
+      "security_id": "CN000568",
+      "symbol": "000568.SZ",
+      "instrument_type": "stock",
+      "listing_date": "1994-05-09",
+      "delisting_date": null,
+      "primary_listing": true,
+      "known_at": "1994-05-02T09:00:00+08:00"
+    },
+    {
+      "security_id": "CN601318",
+      "symbol": "601318.SH",
+      "instrument_type": "stock",
+      "listing_date": "2007-03-01",
+      "delisting_date": null,
+      "primary_listing": true,
+      "known_at": "2007-02-23T09:00:00+08:00"
+    },
+    {
+      "security_id": "CN600036",
+      "symbol": "600036.SH",
+      "instrument_type": "stock",
+      "listing_date": "2002-04-09",
+      "delisting_date": null,
+      "primary_listing": true,
+      "known_at": "2002-04-02T09:00:00+08:00"
+    },
+    {
+      "security_id": "CN000001",
+      "symbol": "000001.SZ",
+      "instrument_type": "stock",
+      "listing_date": "1991-04-03",
+      "delisting_date": null,
+      "primary_listing": true,
+      "known_at": "1991-03-27T09:00:00+08:00"
+    },
+    {
+      "security_id": "CN000001",
+      "symbol": "001289.SZ",
+      "instrument_type": "stock",
+      "listing_date": "2020-01-02",
+      "delisting_date": null,
+      "primary_listing": false,
+      "known_at": "2019-12-20T09:00:00+08:00"
+    },
+    {
+      "security_id": "CN301999",
+      "symbol": "301999.SZ",
+      "instrument_type": "stock",
+      "listing_date": "2025-07-01",
+      "delisting_date": null,
+      "primary_listing": true,
+      "known_at": "2025-06-20T09:00:00+08:00"
+    },
+    {
+      "security_id": "CN600999",
+      "symbol": "600999.SH",
+      "instrument_type": "stock",
+      "listing_date": "2000-01-03",
+      "delisting_date": "2025-06-15",
+      "primary_listing": true,
+      "known_at": "2025-06-10T09:00:00+08:00"
+    },
+    {
+      "security_id": "CN510300",
+      "symbol": "510300.SH",
+      "instrument_type": "etf",
+      "listing_date": "2012-05-28",
+      "delisting_date": null,
+      "primary_listing": true,
+      "known_at": "2012-05-21T09:00:00+08:00"
+    },
+    {
+      "security_id": "CN601999",
+      "symbol": "601999.SH",
+      "instrument_type": "stock",
+      "listing_date": "2010-01-04",
+      "delisting_date": null,
+      "primary_listing": true,
+      "known_at": "2009-12-28T09:00:00+08:00"
+    },
+    {
+      "security_id": "CN688999",
+      "symbol": "688999.SH",
+      "instrument_type": "stock",
+      "listing_date": "2020-01-02",
+      "delisting_date": null,
+      "primary_listing": true,
+      "known_at": "2019-12-20T09:00:00+08:00"
+    },
+    {
+      "security_id": "CN300999",
+      "symbol": "300999.SZ",
+      "instrument_type": "stock",
+      "listing_date": "2021-01-04",
+      "delisting_date": null,
+      "primary_listing": true,
+      "known_at": "2020-12-28T09:00:00+08:00"
+    }
+  ],
+  "memberships": [
+    {
+      "source_row_id": "m-600519-20241216",
+      "symbol": "600519.SH",
+      "effective_from": "2024-12-16",
+      "effective_to": null,
+      "known_at": "2024-12-06T17:00:00+08:00"
+    },
+    {
+      "source_row_id": "m-000858-20241216",
+      "symbol": "000858.SZ",
+      "effective_from": "2024-12-16",
+      "effective_to": null,
+      "known_at": "2024-12-06T17:00:00+08:00"
+    },
+    {
+      "source_row_id": "m-000568-20241216",
+      "symbol": "000568.SZ",
+      "effective_from": "2024-12-16",
+      "effective_to": null,
+      "known_at": "2024-12-06T17:00:00+08:00"
+    },
+    {
+      "source_row_id": "m-601318-20241216",
+      "symbol": "601318.SH",
+      "effective_from": "2024-12-16",
+      "effective_to": null,
+      "known_at": "2024-12-06T17:00:00+08:00"
+    },
+    {
+      "source_row_id": "m-600036-20241216",
+      "symbol": "600036.SH",
+      "effective_from": "2024-12-16",
+      "effective_to": null,
+      "known_at": "2024-12-06T17:00:00+08:00"
+    },
+    {
+      "source_row_id": "m-000001-20241216",
+      "symbol": "000001.SZ",
+      "effective_from": "2024-12-16",
+      "effective_to": null,
+      "known_at": "2024-12-06T17:00:00+08:00"
+    },
+    {
+      "source_row_id": "m-001289-20241216",
+      "symbol": "001289.SZ",
+      "effective_from": "2024-12-16",
+      "effective_to": null,
+      "known_at": "2024-12-06T17:00:00+08:00"
+    },
+    {
+      "source_row_id": "m-301999-20250616",
+      "symbol": "301999.SZ",
+      "effective_from": "2025-06-16",
+      "effective_to": null,
+      "known_at": "2025-06-06T17:00:00+08:00"
+    },
+    {
+      "source_row_id": "m-600999-20241216",
+      "symbol": "600999.SH",
+      "effective_from": "2024-12-16",
+      "effective_to": null,
+      "known_at": "2024-12-06T17:00:00+08:00"
+    },
+    {
+      "source_row_id": "m-510300-20241216",
+      "symbol": "510300.SH",
+      "effective_from": "2024-12-16",
+      "effective_to": null,
+      "known_at": "2024-12-06T17:00:00+08:00"
+    },
+    {
+      "source_row_id": "m-601999-20241216",
+      "symbol": "601999.SH",
+      "effective_from": "2024-12-16",
+      "effective_to": "2025-06-13",
+      "known_at": "2025-06-06T17:00:00+08:00"
+    },
+    {
+      "source_row_id": "m-688999-20250616",
+      "symbol": "688999.SH",
+      "effective_from": "2025-06-16",
+      "effective_to": null,
+      "known_at": "2025-07-01T09:00:00+08:00"
+    },
+    {
+      "source_row_id": "m-300999-20241216",
+      "symbol": "300999.SZ",
+      "effective_from": "2024-12-16",
+      "effective_to": null,
+      "known_at": "2024-12-06T17:00:00+08:00"
+    }
+  ]
+}
