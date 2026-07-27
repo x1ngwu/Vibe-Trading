@@ -52,6 +52,18 @@ from .factor_similarity import (
     build_factor_similarity_object,
     load_factor_feature_snapshot,
 )
+from .factor_evidence import (
+    FactorEvidenceError,
+    build_common_factor_evidence,
+    build_common_factor_evidence_objects,
+)
+from .similarity import (
+    CHANNEL_NAMES,
+    SimilarityAggregationError,
+    SimilaritySensitivityScenario,
+    build_three_channel_similarity,
+    build_three_channel_similarity_object,
+)
 from .price_volume_similarity import (
     PRICE_VOLUME_FEATURE_SNAPSHOT_SCHEMA,
     PRICE_VOLUME_METRICS,
@@ -122,6 +134,7 @@ __all__ = [
     "BusinessFeatureSnapshot",
     "BusinessFieldProvenance",
     "BusinessSimilarityError",
+    "CHANNEL_NAMES",
     "ChannelWeights",
     "ContractError",
     "CostSpec",
@@ -138,6 +151,7 @@ __all__ = [
     "ExecutionSpec",
     "FACTOR_FEATURE_SNAPSHOT_SCHEMA",
     "FactorEvidence",
+    "FactorEvidenceError",
     "FactorFeatureRecord",
     "FactorFeatureSnapshot",
     "FactorFeatureValue",
@@ -176,7 +190,9 @@ __all__ = [
     "ResourceLimits",
     "RiskSpec",
     "SignalRule",
+    "SimilarityAggregationError",
     "SimilarityRun",
+    "SimilaritySensitivityScenario",
     "StockCandidate",
     "StoreIntegrityError",
     "StrategySpec",
@@ -188,8 +204,12 @@ __all__ = [
     "UniverseMembership",
     "UniverseSnapshot",
     "build_business_similarity",
+    "build_common_factor_evidence",
+    "build_common_factor_evidence_objects",
     "build_business_similarity_object",
     "build_tushare_business_feature_snapshot",
+    "build_three_channel_similarity",
+    "build_three_channel_similarity_object",
     "build_peer_set",
     "build_csi300_tushare_source_batch",
     "build_factor_similarity",
