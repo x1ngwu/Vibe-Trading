@@ -17,6 +17,7 @@ inherit the same guarantees:
 from __future__ import annotations
 
 import datetime as dt
+import stat
 import sys
 import time
 from types import SimpleNamespace
@@ -298,8 +299,12 @@ def test_loader_cache_happy_path_writes_then_reuses(
     assert calls["count"] == 1
     pd.testing.assert_frame_equal(first, frame)
     pd.testing.assert_frame_equal(second, frame)
-    assert loader_cache_path(**kwargs).is_file()
-    assert str(loader_cache_path(**kwargs)).startswith(str(loader_cache_root))
+    cache_path = loader_cache_path(**kwargs)
+    assert cache_path.is_file()
+    assert stat.S_IMODE(cache_path.stat().st_mode) == 0o600
+    metadata_path = base._loader_cache_metadata_path(cache_path)
+    assert stat.S_IMODE(metadata_path.stat().st_mode) == 0o600
+    assert str(cache_path).startswith(str(loader_cache_root))
 
 
 def test_loader_cache_corrupt_entry_falls_back_to_live_fetch(

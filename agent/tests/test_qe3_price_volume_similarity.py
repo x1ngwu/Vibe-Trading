@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
 from pydantic import ValidationError
+
+from backtest.loaders.adjustments import (
+    AdjustmentContext,
+    AdjustmentFactorPoint,
+    adjust_stock_frame,
+)
 
 from src.research import (
     DataSnapshotRef,
@@ -402,6 +410,162 @@ def test_sm08_qfq_and_suspension_boundaries_fail_closed_or_remain_visible() -> N
     )
     with pytest.raises(ValidationError, match="exceeds as_of"):
         _snapshot(records=(future, _record("600001.SH")))
+
+
+@pytest.mark.parametrize("window_index", [0, 1])
+def test_sm08_real_company_actions_do_not_create_false_similarity(
+    window_index: int,
+) -> None:
+    fixture = json.loads(
+        (
+            Path(__file__).parent
+            / "fixtures"
+            / "research"
+            / "qe2_real_adjustment_windows_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    window = fixture["windows"][window_index]
+    bars = window["bars"]
+    raw = pd.DataFrame(
+        {
+            "open": [item["raw_close"] for item in bars],
+            "high": [item["raw_close"] for item in bars],
+            "low": [item["raw_close"] for item in bars],
+            "close": [item["raw_close"] for item in bars],
+            "volume": [item["volume"] for item in bars],
+            "amount": [item["amount_cny"] / 1000.0 for item in bars],
+        },
+        index=pd.DatetimeIndex(
+            [item["trade_date"] for item in bars],
+            name="trade_date",
+        ),
+    )
+    record_close = next(
+        item["raw_close"]
+        for item in bars
+        if item["trade_date"] == window["record_date"]
+    )
+    theoretical_ex = (
+        record_close - window["effective_cash_per_share"]
+    ) / window["effective_share_multiplier"]
+    event_factor = record_close / theoretical_ex
+    context = AdjustmentContext(
+        symbol=window["symbol"],
+        source="akshare",
+        version=fixture["fetched_at"],
+        as_of=date.fromisoformat(bars[-1]["trade_date"]),
+        points=tuple(
+            AdjustmentFactorPoint(
+                trade_date=date.fromisoformat(item["trade_date"]),
+                price_factor=(
+                    event_factor
+                    if item["trade_date"] >= window["ex_date"]
+                    else 1.0
+                ),
+                share_factor=(
+                    window["effective_share_multiplier"]
+                    if item["trade_date"] >= window["ex_date"]
+                    else 1.0
+                ),
+                known_at=datetime.combine(
+                    date.fromisoformat(item["trade_date"]),
+                    datetime.min.time(),
+                    tzinfo=ZoneInfo("Asia/Shanghai"),
+                ),
+            )
+            for item in bars
+        ),
+    )
+    qfq = adjust_stock_frame(raw, adjustment="qfq", context=context).frame
+    as_of = qfq.index[-1].date()
+    target = window["symbol"]
+    adjusted_candidate = "600001.SH"
+    raw_candidate = "600002.SH"
+
+    def record(symbol: str, frame: pd.DataFrame) -> PriceVolumeFeatureRecord:
+        return PriceVolumeFeatureRecord(
+            symbol=symbol,
+            source="akshare",
+            source_version=fixture["fetched_at"],
+            observations=tuple(
+                PriceVolumeObservation(
+                    trade_date=pd.Timestamp(trade_date).date(),
+                    close=float(row["close"]),
+                    volume=float(row["volume"]),
+                    amount=float(row["amount"]),
+                )
+                for trade_date, row in frame.iterrows()
+            ),
+        )
+
+    records = (
+        record(target, qfq),
+        record(adjusted_candidate, qfq * 10.0),
+        record(raw_candidate, raw * 10.0),
+    )
+    research = create_research_object(
+        ResearchSpec(
+            symbols=(target,),
+            as_of=as_of,
+            lookback_days=(len(bars),),
+            candidate_universe=f"csi300@{as_of.isoformat()}",
+        )
+    )
+    data_snapshot = create_research_object(
+        DataSnapshotRef(
+            snapshot_sha256="d" * 64,
+            as_of=as_of,
+            start_date=qfq.index[0].date(),
+            end_date=as_of,
+            adjustment="qfq",
+            symbols=(target, adjusted_candidate, raw_candidate),
+            fields=("close", "volume", "amount"),
+            requested_sources=("akshare",),
+            actual_sources={
+                target: "akshare",
+                adjusted_candidate: "akshare",
+                raw_candidate: "akshare",
+            },
+        ),
+        parent_refs=(research.ref(),),
+    )
+    peers = create_research_object(
+        PeerSet(
+            research_spec_ref=research.ref(),
+            data_snapshot_ref=data_snapshot.ref(),
+            target_symbol=target,
+            members=(adjusted_candidate, raw_candidate),
+            included_reasons={
+                adjusted_candidate: ("real_action_qfq",),
+                raw_candidate: ("real_action_raw_control",),
+            },
+            coverage=1.0,
+        ),
+        parent_refs=(research.ref(), data_snapshot.ref()),
+    )
+    features = PriceVolumeFeatureSnapshot(
+        snapshot_id=f"qe3-sm08-real-action-{window_index}",
+        data_snapshot_sha256=data_snapshot.payload.snapshot_sha256,
+        as_of=as_of,
+        window_days=len(bars),
+        records=records,
+    )
+    result = build_price_volume_similarity(
+        research,
+        data_snapshot,
+        peers,
+        features,
+        metric_weights=_METRIC_WEIGHTS,
+        top_n=2,
+        min_coverage=0.5,
+    )
+
+    assert result.candidates[0].symbol == adjusted_candidate
+    assert result.candidates[0].price_volume_score == pytest.approx(1.0)
+    assert (
+        result.candidates[0].price_volume_score
+        > result.candidates[1].price_volume_score
+    )
 
 
 def test_price_volume_result_is_explainable_closed_dag_and_rejects_bad_binding() -> None:

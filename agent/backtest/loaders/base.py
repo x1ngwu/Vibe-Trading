@@ -523,6 +523,8 @@ def _write_loader_cache_frame(cache_path: Path, frame: pd.DataFrame) -> None:
             json.dumps(metadata, sort_keys=True, separators=(",", ":")),
             encoding="utf-8",
         )
+        os.chmod(tmp_path, 0o600)
+        os.chmod(tmp_metadata_path, 0o600)
         os.replace(tmp_path, cache_path)
         os.replace(tmp_metadata_path, metadata_path)
     except Exception as exc:  # noqa: BLE001 - cache write failures should not fail fetches

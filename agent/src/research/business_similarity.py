@@ -525,6 +525,7 @@ def build_business_similarity(
         raise BusinessSimilarityError("top_n must be between 1 and 500")
     if not 0.0 < min_coverage <= 1.0:
         raise BusinessSimilarityError("min_coverage must be in (0, 1]")
+    feature_snapshot_sha256 = features.snapshot_sha256
 
     records = {item.symbol: item for item in features.records}
     target = records.get(peers.target_symbol)
@@ -610,7 +611,7 @@ def build_business_similarity(
         ]
         evidence = (
             *supporting,
-            f"business_snapshot_sha256:{features.snapshot_sha256}",
+            f"business_snapshot_sha256:{feature_snapshot_sha256}",
             *provenance,
         )
         scored.append(
@@ -650,7 +651,7 @@ def build_business_similarity(
         for rank, item in enumerate(selected, start=1)
     )
     notes = (
-        f"business_snapshot_sha256:{features.snapshot_sha256}",
+        f"business_snapshot_sha256:{feature_snapshot_sha256}",
         f"business_dimensions:{','.join(dimensions)}",
         f"business_min_coverage:{min_coverage:.6f}",
         "business_missing_values:weight_renormalized_never_zero_filled",

@@ -551,6 +551,7 @@ def build_price_volume_similarity(
         raise PriceVolumeSimilarityError("top_n must be between 1 and 500")
     if not 0.0 < min_coverage <= 1.0:
         raise PriceVolumeSimilarityError("min_coverage must be in (0, 1]")
+    feature_snapshot_sha256 = features.snapshot_sha256
     weights = _normalize_weights(metric_weights)
     records = {item.symbol: item for item in features.records}
     target = records.get(peers.target_symbol)
@@ -604,7 +605,7 @@ def build_price_volume_similarity(
         ]
         evidence.extend(
             (
-                f"price_volume_snapshot_sha256:{features.snapshot_sha256}",
+                f"price_volume_snapshot_sha256:{feature_snapshot_sha256}",
                 f"data_snapshot_sha256:{features.data_snapshot_sha256}",
                 f"price_volume_source:{candidate.source}@{candidate.source_version}",
             )
@@ -660,7 +661,7 @@ def build_price_volume_similarity(
         f"{metric_id}={weight:.12f}" for metric_id, weight in weights
     )
     notes = (
-        f"price_volume_snapshot_sha256:{features.snapshot_sha256}",
+        f"price_volume_snapshot_sha256:{feature_snapshot_sha256}",
         f"data_snapshot_sha256:{features.data_snapshot_sha256}",
         f"price_volume_metric_weights:{normalized_weights}",
         f"price_volume_min_coverage:{min_coverage:.6f}",

@@ -291,6 +291,7 @@ def build_factor_similarity(
         raise FactorSimilarityError("top_n must be between 1 and 500")
     if not 0.0 < min_coverage <= 1.0:
         raise FactorSimilarityError("min_coverage must be in (0, 1]")
+    feature_snapshot_sha256 = features.snapshot_sha256
     weights = _normalize_weights(factor_weights)
     records = {item.symbol: item.value_map() for item in features.records}
     target_values = records.get(peers.target_symbol)
@@ -406,7 +407,7 @@ def build_factor_similarity(
         ]
         evidence = (
             *supporting,
-            f"factor_snapshot_sha256:{features.snapshot_sha256}",
+            f"factor_snapshot_sha256:{feature_snapshot_sha256}",
             *provenance,
         )
         scored.append(
@@ -454,7 +455,7 @@ def build_factor_similarity(
         f"{factor_id}={weight:.12f}" for factor_id, weight in weights
     )
     notes = (
-        f"factor_snapshot_sha256:{features.snapshot_sha256}",
+        f"factor_snapshot_sha256:{feature_snapshot_sha256}",
         f"factor_weights:{normalized_weights}",
         f"factor_min_coverage:{min_coverage:.6f}",
         f"robust_z_clip:{ROBUST_Z_CLIP:.6f}",
