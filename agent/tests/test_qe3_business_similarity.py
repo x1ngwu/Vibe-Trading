@@ -314,6 +314,39 @@ def test_tushare_business_adapter_scales_units_and_normalizes_raw_order() -> Non
         liquidity_window_days=20,
     )
 
+    mixed = build_tushare_business_feature_snapshot(
+        stock_rows,
+        cap_rows,
+        daily_rows,
+        symbols=(_TARGET, *_MEMBERS),
+        snapshot_id="qe3-business-mixed-v1",
+        source_version="tushare-pro-v1",
+        stock_metadata_source="baostock",
+        stock_metadata_source_version="baostock-00.9.30",
+        stock_metadata_industry_field="query_stock_industry.industry",
+        stock_metadata_listing_date_field="query_stock_basic.ipoDate",
+        market_cap_source="tushare",
+        market_cap_source_version="tushare-pro-v1",
+        liquidity_source="akshare",
+        liquidity_source_version="akshare-qfq-1.18.70",
+        liquidity_source_field="stock_zh_a_hist.amount",
+        as_of=_AS_OF,
+        market_trade_date=_AS_OF,
+        captured_at=_KNOWN_AT,
+        liquidity_window_days=20,
+    )
+    mixed_target = {item.symbol: item for item in mixed.records}[_TARGET]
+    assert mixed_target.provenance["industry"].source == "baostock"
+    assert mixed_target.provenance["industry"].source_fields == (
+        "query_stock_industry.industry",
+    )
+    assert mixed_target.provenance["listing_age"].source == "baostock"
+    assert mixed_target.provenance["market_cap"].source == "tushare"
+    assert mixed_target.provenance["liquidity"].source == "akshare"
+    assert mixed_target.provenance["liquidity"].source_fields == (
+        "stock_zh_a_hist.amount",
+    )
+
     invalid_caps = [dict(row) for row in cap_rows]
     invalid_caps[0]["trade_date"] = "20250627"
     with pytest.raises(BusinessSimilarityError, match="market_trade_date"):

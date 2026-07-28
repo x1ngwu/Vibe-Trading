@@ -224,6 +224,15 @@ def build_tushare_business_feature_snapshot(
     symbols: Sequence[str],
     snapshot_id: str,
     source_version: str,
+    stock_metadata_source: str = "tushare",
+    stock_metadata_source_version: str | None = None,
+    stock_metadata_industry_field: str = "stock_basic.industry",
+    stock_metadata_listing_date_field: str = "stock_basic.list_date",
+    market_cap_source: str = "tushare",
+    market_cap_source_version: str | None = None,
+    liquidity_source: str = "tushare",
+    liquidity_source_version: str | None = None,
+    liquidity_source_field: str = "daily.amount",
     as_of: date,
     market_trade_date: date,
     captured_at: datetime,
@@ -290,19 +299,31 @@ def build_tushare_business_feature_snapshot(
         if amount is not None:
             amounts_by_symbol.setdefault(symbol, []).append(amount * 1_000.0)
 
-    provenance_fields = {
-        "industry": ("stock_basic.industry",),
-        "market_cap": ("daily_basic.total_mv",),
-        "liquidity": ("daily.amount",),
-        "listing_age": ("stock_basic.list_date",),
+    stock_metadata_version = stock_metadata_source_version or source_version
+    cap_version = market_cap_source_version or source_version
+    turnover_version = liquidity_source_version or source_version
+    provenance_inputs = {
+        "industry": (
+            stock_metadata_source,
+            stock_metadata_version,
+            (stock_metadata_industry_field,),
+        ),
+        "market_cap": (market_cap_source, cap_version, ("daily_basic.total_mv",)),
+        "liquidity": (liquidity_source, turnover_version, (liquidity_source_field,)),
+        "listing_age": (
+            stock_metadata_source,
+            stock_metadata_version,
+            (stock_metadata_listing_date_field,),
+        ),
     }
 
     def provenance(dimension: BusinessDimension) -> BusinessFieldProvenance:
+        source, version, fields = provenance_inputs[dimension]
         return BusinessFieldProvenance(
-            source="tushare",
-            source_version=source_version,
+            source=source,
+            source_version=version,
             known_at=captured_at,
-            source_fields=provenance_fields[dimension],
+            source_fields=fields,
         )
 
     records: list[BusinessFeatureRecord] = []

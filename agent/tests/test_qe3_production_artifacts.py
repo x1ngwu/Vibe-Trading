@@ -266,8 +266,25 @@ def test_official_csindex_batch_is_complete_content_bound_and_materializable() -
         as_of=AS_OF,
         captured_at=CAPTURED_AT,
     )
+    cached_constituents = [dict(row) for row in constituent_rows]
+    cached_weights = [dict(row) for row in weight_rows]
+    for row in cached_constituents:
+        row["日期"] = f"{row['日期'].isoformat()}T00:00:00.000"
+    for row in cached_weights:
+        row["日期"] = f"{row['日期'].isoformat()}T00:00:00.000"
+    cached = build_csi300_csindex_source_batch(
+        cached_constituents,
+        cached_weights,
+        stock_rows,
+        batch_id=first.batch_id,
+        source_version=first.source_version,
+        as_of=AS_OF,
+        captured_at=CAPTURED_AT,
+    )
+
 
     assert first == second
+    assert first == cached
     assert len(first.symbols) == 300
     assert first.source_content_sha256 == second.source_content_sha256
     universe = materialize_csi300_csindex_universe(first)

@@ -158,7 +158,13 @@ def _optional_date(value: Any, field: str) -> date | None:
         return value.date()
     if isinstance(value, date):
         return value
-    normalized = str(value).strip().replace("-", "")
+    raw = str(value).strip()
+    if len(raw) >= 10 and raw[4:5] == "-" and raw[7:8] == "-":
+        try:
+            return date.fromisoformat(raw[:10])
+        except ValueError as exc:
+            raise ProductionArtifactError(f"source field {field} is not a date") from exc
+    normalized = raw.replace("-", "")
     if len(normalized) == 8 and normalized.isdigit():
         try:
             return date(
@@ -449,6 +455,7 @@ def build_factor_snapshot_from_price_volume(
     *,
     snapshot_id: str,
     source_version: str,
+    source: str = "akshare",
     known_at: datetime,
     factor_window_days: int = 20,
 ) -> FactorFeatureSnapshot:
@@ -491,7 +498,7 @@ def build_factor_snapshot_from_price_volume(
                     FactorFeatureValue(
                         factor_id=factor_id,
                         value=value,
-                        source="akshare",
+                        source=source,
                         source_version=source_version,
                         known_at=known_at,
                         source_fields=("qfq.close", "qfq.amount"),
