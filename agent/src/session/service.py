@@ -25,6 +25,7 @@ from src.session.models import (
 )
 from src.session.search import get_shared_index
 from src.session.store import SessionStore
+from src.research.similarity_presentation import SimilarityVisualizationSpec
 
 
 _VISUALIZATION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -63,6 +64,14 @@ def load_visualization_specs(run_dir: Path) -> list[Dict[str, Any]]:
     specs: list[Dict[str, Any]] = []
     for item in raw[-5:]:
         if not isinstance(item, dict):
+            continue
+        if item.get("type") == "similarity_ranking":
+            try:
+                specs.append(
+                    SimilarityVisualizationSpec.model_validate(item).model_dump(mode="json")
+                )
+            except ValueError:
+                pass
             continue
         visualization_id = item.get("visualization_id")
         data_ref = item.get("data_ref")

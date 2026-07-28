@@ -15,6 +15,8 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 
+from src.research.similarity_presentation import SimilarityVisualizationPayload
+
 
 # ---------------------------------------------------------------------------
 # Helper functions (module-level; host Pydantic models resolved via sys.modules)
@@ -318,6 +320,15 @@ def register_runs_routes(
             raise
         except (OSError, json.JSONDecodeError):
             raise HTTPException(status_code=422, detail="invalid visualization payload")
+
+        if isinstance(payload, dict) and payload.get("type") == "similarity_ranking":
+            try:
+                similarity_payload = SimilarityVisualizationPayload.model_validate(payload)
+            except ValueError:
+                raise HTTPException(status_code=422, detail="invalid visualization payload")
+            if similarity_payload.visualization_id != visualization_id:
+                raise HTTPException(status_code=422, detail="invalid visualization payload")
+            return JSONResponse(similarity_payload.model_dump(mode="json"))
 
         if (
             not isinstance(payload, dict)
