@@ -369,7 +369,7 @@ export interface PriceBar {
   volume: number;
 }
 
-export interface RunVisualization {
+export interface CandlestickRunVisualization {
   schema_version: 1;
   visualization_id: string;
   type: "candlestick_volume";
@@ -391,6 +391,42 @@ export interface RunVisualization {
   dropped_bar_count?: number;
   bars: PriceBar[];
 }
+
+export interface SimilarityVisualizationCandidate {
+  rank: number;
+  symbol: string;
+  combined_score: number;
+  coverage: number;
+  business_score: number | null;
+  factor_score: number | null;
+  price_volume_score: number | null;
+  rank_stability: number | null;
+  evidence: string[];
+  counterevidence: string[];
+}
+
+export interface SimilarityRunVisualization {
+  schema_version: 1;
+  visualization_id: string;
+  type: "similarity_ranking";
+  similarity_run_id: string;
+  similarity_sha256: string;
+  research_spec_id: string;
+  target_symbols: string[];
+  as_of: string;
+  candidate_universe: string;
+  weights: {
+    business: number;
+    factor: number;
+    price_volume: number;
+  };
+  candidates: SimilarityVisualizationCandidate[];
+  excluded_symbol_count: number;
+}
+
+export type RunVisualization =
+  | CandlestickRunVisualization
+  | SimilarityRunVisualization;
 
 export interface TradeMarker {
   time: string;

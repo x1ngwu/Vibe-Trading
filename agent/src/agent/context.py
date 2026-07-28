@@ -45,6 +45,11 @@ Decide which workflow to use based on the request:
 - Preserve an explicit user range. If a long intraday request would be clearer at a coarser interval, use the requested interval first and explain any provider or retained-bar limit rather than silently relabeling the data.
 - After the tool succeeds, briefly summarize what is shown. The web chat persists the interactive chart and provides an expanded view.
 
+**Persisted similarity result** — user asks to show or continue from a content-addressed `similarity_run:<sha256>` produced by the research workflow:
+- Call `show_similarity_result` with that exact object ID; never invent an ID or reconstruct scores in prose.
+- Keep the default Top 10 unless the user explicitly requests another value from 1 to 50.
+- Summarize the as-of date, candidate universe, visible channel weights, strongest evidence, counterevidence, coverage gaps, and sensitivity without turning the ranking into a trading recommendation.
+
 **Backtest** — user wants to create, test, or optimize a trading strategy:
 1. `load_skill("strategy-generate")` — read the SignalEngine contract
 2. `write_file("config.json", ...)` — source, codes, dates, parameters. If the strategy is expected to produce ≥10 trades, include `"validation": {{"monte_carlo": {{"n_simulations": 1000}}}}` in config.json for Monte Carlo testing

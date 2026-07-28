@@ -37,7 +37,7 @@ export interface SwarmRunStatus {
   agents: SwarmAgentStatus[];
 }
 
-export interface VisualizationSpec {
+export interface CandlestickVisualizationSpec {
   schema_version: 1;
   type: "candlestick_volume";
   visualization_id: string;
@@ -63,6 +63,31 @@ export interface VisualizationSpec {
   fallback_text?: string;
 }
 
+export interface SimilarityChannelWeights {
+  business: number;
+  factor: number;
+  price_volume: number;
+}
+
+export interface SimilarityRankingVisualizationSpec {
+  schema_version: 1;
+  type: "similarity_ranking";
+  visualization_id: string;
+  data_ref: string;
+  title?: string;
+  similarity_run_id: string;
+  similarity_sha256: string;
+  target_symbols: string[];
+  as_of: string;
+  candidate_universe: string;
+  candidate_count: number;
+  weights: SimilarityChannelWeights;
+  fallback_text?: string;
+}
+
+export type VisualizationSpec =
+  | CandlestickVisualizationSpec
+  | SimilarityRankingVisualizationSpec;
 export interface AgentMessage {
   id: string;
   type: AgentMessageType;

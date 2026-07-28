@@ -281,4 +281,136 @@ describe("VisualizationRenderer", () => {
     expect(api.getRunVisualization).toHaveBeenCalledTimes(1);
   });
 
+  it("renders similarity scope, weights, scores, evidence, counterevidence, and degradation", async () => {
+    const digest = "a".repeat(64);
+    const rankingSpec = {
+      schema_version: 1 as const,
+      type: "similarity_ranking" as const,
+      visualization_id: "similarity_ui",
+      data_ref: "similarity_ui",
+      title: "Two-stock similarity candidates",
+      similarity_run_id: `similarity_run:${digest}`,
+      similarity_sha256: digest,
+      target_symbols: ["600519.SH", "000858.SZ"],
+      as_of: "2026-07-27",
+      candidate_universe: "csi300@2026-07-27",
+      candidate_count: 1,
+      weights: { business: 0.3, factor: 0.4, price_volume: 0.3 },
+      fallback_text: "Ranking unavailable",
+    };
+    vi.spyOn(api, "getRunVisualization").mockResolvedValue({
+      schema_version: 1,
+      visualization_id: "similarity_ui",
+      type: "similarity_ranking",
+      similarity_run_id: `similarity_run:${digest}`,
+      similarity_sha256: digest,
+      research_spec_id: `research_spec:${"b".repeat(64)}`,
+      target_symbols: ["600519.SH", "000858.SZ"],
+      as_of: "2026-07-27",
+      candidate_universe: "csi300@2026-07-27",
+      weights: { business: 0.3, factor: 0.4, price_volume: 0.3 },
+      candidates: [{
+        rank: 1,
+        symbol: "000568.SZ",
+        combined_score: 0.82,
+        coverage: 0.7,
+        business_score: 0.91,
+        factor_score: 0.76,
+        price_volume_score: null,
+        rank_stability: 0.875,
+        evidence: ["same_industry:白酒"],
+        counterevidence: ["price_volume_channel:unavailable"],
+      }],
+      excluded_symbol_count: 2,
+    });
+
+    render(<VisualizationRenderer runId="run-similarity" visualizations={[rankingSpec]} />);
+
+    expect(await screen.findByText("000568.SZ")).toBeInTheDocument();
+    expect(screen.getByText(/Targets 600519.SH, 000858.SZ/)).toBeInTheDocument();
+    expect(screen.getByText("Business 30%")).toBeInTheDocument();
+    expect(screen.getByText("Factor 40%")).toBeInTheDocument();
+    expect(screen.getByText("Price/volume 30%")).toBeInTheDocument();
+    expect(screen.getByText("+ same_industry:白酒")).toBeInTheDocument();
+    expect(screen.getByText("− price_volume_channel:unavailable")).toBeInTheDocument();
+    expect(screen.getByText(/Degraded coverage · unavailable: price\/volume/)).toBeInTheDocument();
+    expect(screen.getByText(/2 symbols excluded · result/)).toBeInTheDocument();
+  });
+
+  it("restores a historical similarity ranking from the shared visualization cache", async () => {
+    const digest = "c".repeat(64);
+    const rankingSpec = {
+      schema_version: 1 as const,
+      type: "similarity_ranking" as const,
+      visualization_id: "similarity_history",
+      data_ref: "similarity_history",
+      similarity_run_id: `similarity_run:${digest}`,
+      similarity_sha256: digest,
+      target_symbols: ["600519.SH"],
+      as_of: "2026-07-27",
+      candidate_universe: "csi300@2026-07-27",
+      candidate_count: 1,
+      weights: { business: 0.3, factor: 0.4, price_volume: 0.3 },
+    };
+    vi.spyOn(api, "getRunVisualization").mockResolvedValue({
+      schema_version: 1, visualization_id: "similarity_history", type: "similarity_ranking",
+      similarity_run_id: `similarity_run:${digest}`, similarity_sha256: digest,
+      research_spec_id: `research_spec:${"d".repeat(64)}`, target_symbols: ["600519.SH"],
+      as_of: "2026-07-27", candidate_universe: "csi300@2026-07-27",
+      weights: { business: 0.3, factor: 0.4, price_volume: 0.3 },
+      candidates: [{ rank: 1, symbol: "000858.SZ", combined_score: 0.9, coverage: 1,
+        business_score: 0.9, factor_score: 0.9, price_volume_score: 0.9,
+        rank_stability: 1, evidence: ["support"], counterevidence: ["risk"] }],
+      excluded_symbol_count: 1,
+    });
+
+    const first = render(<VisualizationRenderer runId="run-sim-history" visualizations={[rankingSpec]} />);
+    await screen.findByText("000858.SZ");
+    first.unmount();
+    render(<VisualizationRenderer runId="run-sim-history" visualizations={[rankingSpec]} />);
+
+    expect(await screen.findByText("000858.SZ")).toBeInTheDocument();
+    expect(api.getRunVisualization).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when similarity payload weights differ from the persisted spec", async () => {
+    const digest = "e".repeat(64);
+    const rankingSpec = {
+      schema_version: 1 as const,
+      type: "similarity_ranking" as const,
+      visualization_id: "similarity_weight_mismatch",
+      data_ref: "similarity_weight_mismatch",
+      similarity_run_id: `similarity_run:${digest}`,
+      similarity_sha256: digest,
+      target_symbols: ["600519.SH"],
+      as_of: "2026-07-27",
+      candidate_universe: "csi300@2026-07-27",
+      candidate_count: 1,
+      weights: { business: 0.3, factor: 0.4, price_volume: 0.3 },
+    };
+    vi.spyOn(api, "getRunVisualization").mockResolvedValue({
+      schema_version: 1,
+      visualization_id: "similarity_weight_mismatch",
+      type: "similarity_ranking",
+      similarity_run_id: `similarity_run:${digest}`,
+      similarity_sha256: digest,
+      research_spec_id: `research_spec:${"f".repeat(64)}`,
+      target_symbols: ["600519.SH"],
+      as_of: "2026-07-27",
+      candidate_universe: "csi300@2026-07-27",
+      weights: { business: 0.2, factor: 0.5, price_volume: 0.3 },
+      candidates: [{ rank: 1, symbol: "000858.SZ", combined_score: 0.9, coverage: 1,
+        business_score: 0.9, factor_score: 0.9, price_volume_score: 0.9,
+        rank_stability: 1, evidence: ["support"], counterevidence: ["risk"] }],
+      excluded_symbol_count: 1,
+    });
+
+    render(<VisualizationRenderer runId="run-sim-mismatch" visualizations={[rankingSpec]} />);
+
+    expect(await screen.findByText(
+      "Similarity payload did not match its content-bound manifest.",
+    )).toBeInTheDocument();
+    expect(screen.queryByText("000858.SZ")).not.toBeInTheDocument();
+  });
+
 });

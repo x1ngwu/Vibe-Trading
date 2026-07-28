@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
+from src.agent.context import _SYSTEM_PROMPT
 from src.research.contracts import (
     ChannelWeights,
     DataSnapshotRef,
@@ -16,7 +17,17 @@ from src.research.contracts import (
 )
 from src.research.store import ResearchStore
 from src.session.service import load_visualization_specs
-from src.tools import similarity_result_tool
+from src.tools import build_registry, similarity_result_tool
+
+
+def test_similarity_result_tool_is_registered_and_routed_without_shell_tools() -> None:
+    registry = build_registry(include_shell_tools=False)
+
+    assert "show_similarity_result" in registry.tool_names
+    assert "bash" not in registry.tool_names
+    assert "Call `show_similarity_result`" in _SYSTEM_PROMPT
+    assert similarity_result_tool.ShowSimilarityResultTool.requires_current_run_dir is True
+    assert similarity_result_tool.ShowSimilarityResultTool.parameters["required"] == ["similarity_run_id"]
 
 
 def _stored_similarity(tmp_path):
