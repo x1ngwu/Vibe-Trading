@@ -27,9 +27,11 @@ _RULES: tuple[InjectionRule, ...] = (
     InjectionRule(
         "instruction_override",
         re.compile(
-            r"\b(ignore|disregard|forget|bypass|override)\b.{0,80}"
+            r"(?:\b(ignore|disregard|forget|bypass|override)\b.{0,80}"
             r"\b(previous|prior|above|earlier|system|developer)\b.{0,40}"
-            r"\b(instructions?|rules?|messages?|prompt)\b",
+            r"\b(instructions?|rules?|messages?|prompt)\b|"
+            r"(?:忽略|无视|忘记|绕过|覆盖).{0,40}"
+            r"(?:之前|先前|以上|系统|开发者).{0,30}(?:指令|规则|消息|提示词))",
             re.IGNORECASE | re.DOTALL,
         ),
         "high",
@@ -38,8 +40,10 @@ _RULES: tuple[InjectionRule, ...] = (
     InjectionRule(
         "system_prompt_exfiltration",
         re.compile(
-            r"\b(reveal|print|show|dump|leak|exfiltrate)\b.{0,80}"
-            r"\b(system|developer|hidden)\b.{0,40}\b(prompt|instructions?|rules?|message)\b",
+            r"(?:\b(reveal|print|show|dump|leak|exfiltrate)\b.{0,80}"
+            r"\b(system|developer|hidden)\b.{0,40}\b(prompt|instructions?|rules?|message)\b|"
+            r"(?:显示|打印|输出|泄露|窃取).{0,40}"
+            r"(?:系统|开发者|隐藏).{0,30}(?:提示词|指令|规则|消息))",
             re.IGNORECASE | re.DOTALL,
         ),
         "high",
@@ -49,7 +53,8 @@ _RULES: tuple[InjectionRule, ...] = (
         "role_or_channel_claim",
         re.compile(
             r"\b(system|developer)\s+message\b|\byou are now\b.{0,50}"
-            r"\b(system|developer|admin|root)\b",
+            r"\b(system|developer|admin|root)\b|"
+            r"(?:你现在是|将你设为).{0,30}(?:系统|开发者|管理员|root)",
             re.IGNORECASE | re.DOTALL,
         ),
         "medium",
@@ -58,8 +63,10 @@ _RULES: tuple[InjectionRule, ...] = (
     InjectionRule(
         "secret_exfiltration",
         re.compile(
-            r"\b(print|show|dump|send|exfiltrate|leak)\b.{0,80}"
-            r"\b(api[_ -]?keys?|tokens?|passwords?|secrets?|env(?:ironment)? vars?)\b",
+            r"(?:\b(print|show|dump|send|exfiltrate|leak)\b.{0,80}"
+            r"\b(api[_ -]?keys?|tokens?|passwords?|secrets?|env(?:ironment)? vars?)\b|"
+            r"(?:显示|打印|输出|发送|泄露|窃取).{0,40}"
+            r"(?:API.?密钥|密钥|令牌|密码|秘密|环境变量))",
             re.IGNORECASE | re.DOTALL,
         ),
         "high",
@@ -68,7 +75,10 @@ _RULES: tuple[InjectionRule, ...] = (
     InjectionRule(
         "tool_abuse",
         re.compile(
-            r"\b(call|run|execute|use)\b.{0,80}\b(shell|bash|terminal|python|curl)\b",
+            r"(?:\b(call|run|execute|use)\b.{0,80}"
+            r"\b(shell|bash|terminal|python|curl)\b|"
+            r"(?:调用|运行|执行|使用).{0,40}"
+            r"(?:shell|bash|终端|python|curl|系统命令))",
             re.IGNORECASE | re.DOTALL,
         ),
         "medium",

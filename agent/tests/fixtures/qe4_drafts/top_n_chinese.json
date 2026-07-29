@@ -1,0 +1,10 @@
+{
+  "schema_version": "vibe.strategy-draft.v1",
+  "template_id": "top_n_rebalance",
+  "title": "每月动量前五",
+  "ranking_field": "momentum_20d",
+  "top_n": "前五只",
+  "rebalance": "每月",
+  "risk_level": "low",
+  "test_end": "今天"
+}

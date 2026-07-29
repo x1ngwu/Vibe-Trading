@@ -16,6 +16,7 @@ StrategyIssueCode = Literal[
     "a_share_rule_mismatch",
     "crossing_consecutive_days",
     "duplicate_signal",
+    "evaluation_before_snapshot",
     "evaluation_after_snapshot",
     "field_self_reference",
     "invalid_field_reference",
@@ -251,6 +252,13 @@ def validate_strategy_spec(
                 "evaluation_after_snapshot",
                 "evaluation.test_end",
                 "evaluation cannot use data after the snapshot as_of",
+            )
+        if spec.evaluation.train_end < snapshot_payload.start_date:
+            _issue(
+                issues,
+                "evaluation_before_snapshot",
+                "evaluation.train_end",
+                "evaluation cannot start before the fixed snapshot",
             )
 
     ordered = tuple(sorted(issues, key=lambda item: (item.path, item.code, item.message)))

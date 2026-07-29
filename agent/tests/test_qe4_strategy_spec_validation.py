@@ -34,7 +34,7 @@ def _snapshot(*, digest: str = "1" * 64):
         DataSnapshotRef(
             snapshot_sha256=digest,
             as_of=date(2025, 6, 30),
-            start_date=date(2024, 1, 2),
+            start_date=date(2023, 1, 3),
             end_date=date(2025, 6, 30),
             adjustment="qfq",
             symbols=("600519.SH", "000858.SZ"),
@@ -300,6 +300,23 @@ def test_qe4_1_snapshot_identity_symbols_and_as_of_are_bound() -> None:
         "evaluation_after_snapshot",
         "snapshot_ref_mismatch",
         "symbol_outside_snapshot",
+    }
+
+
+def test_qe4_1_evaluation_cannot_start_before_snapshot_history() -> None:
+    snapshot = _snapshot()
+    invalid = _replace(
+        _strategy(snapshot=snapshot),
+        evaluation=EvaluationSpec(
+            train_end=date(2022, 12, 30),
+            validation_end=date(2024, 12, 31),
+            test_end=date(2025, 6, 30),
+            benchmark="000300.SH",
+        ),
+    )
+
+    assert _issue_codes(invalid, snapshot=snapshot) == {
+        "evaluation_before_snapshot"
     }
 
 

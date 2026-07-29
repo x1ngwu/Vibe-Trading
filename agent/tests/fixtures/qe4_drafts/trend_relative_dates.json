@@ -1,0 +1,16 @@
+{
+  "schema_version": "vibe.strategy-draft.v1",
+  "template_id": "factor_trend_confirmation",
+  "title": "动量与趋势确认",
+  "factor_field": "momentum_20d",
+  "operator": "gt",
+  "threshold": "百分之十",
+  "trend_kind": "ema",
+  "trend_window": "六十日",
+  "rebalance": "每周",
+  "max_positions": "两只",
+  "max_position_weight": "百分之五十",
+  "train_end": "两年前",
+  "validation_end": "一年前",
+  "test_end": "三个月前"
+}
