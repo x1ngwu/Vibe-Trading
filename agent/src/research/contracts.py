@@ -21,6 +21,8 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictFloat,
+    StrictInt,
     TypeAdapter,
     field_validator,
     model_validator,
@@ -354,7 +356,7 @@ class SignalRule(_StrictModel):
 
     field: str = Field(pattern=r"^[a-z][a-z0-9._:-]{0,127}$")
     operator: Literal["gt", "gte", "lt", "lte", "crosses_above", "crosses_below"]
-    value: float | int | str
+    value: StrictFloat | StrictInt | str
     lookback_days: int = Field(ge=1, le=10_000)
     consecutive_days: int = Field(default=1, ge=1, le=1_000)
 
@@ -447,6 +449,8 @@ class StrategySpec(_StrictModel):
         if self.data_snapshot_ref.object_type != "data_snapshot_ref":
             raise ValueError("data_snapshot_ref has the wrong object type")
         _unique_tuple(self.universe_symbols, "universe_symbols")
+        if any(not _SYMBOL_RE.fullmatch(value) for value in self.universe_symbols):
+            raise ValueError("universe_symbols contain an invalid canonical identifier")
         return self
 
 
