@@ -13,6 +13,11 @@ from .contracts import ChannelWeights
 _SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9._-]{0,31}$")
 _SIMILARITY_RUN_ID_RE = re.compile(r"^similarity_run:[0-9a-f]{64}$")
 _VISUALIZATION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+_SUMMARY_CHANNEL_ORDER = ("business", "factor", "price_volume")
+
+SIMILARITY_CANDIDATE_SUMMARY_MAX_ITEMS = 10
+SIMILARITY_CANDIDATE_SUMMARY_MAX_EVIDENCE = 1
+SIMILARITY_CANDIDATE_SUMMARY_MAX_TEXT_LENGTH = 100
 
 
 class _StrictPresentationModel(BaseModel):
@@ -37,6 +42,65 @@ class SimilarityVisualizationCandidate(_StrictPresentationModel):
         if any(not value.strip() or len(value) > 1_000 for value in values):
             raise ValueError("evidence entries must contain 1 to 1000 characters")
         return values
+
+
+class SimilarityCandidateSummary(_StrictPresentationModel):
+    """Strict model-visible projection of one verified visualization candidate."""
+
+    rank: int = Field(ge=1, le=SIMILARITY_CANDIDATE_SUMMARY_MAX_ITEMS)
+    symbol: str = Field(pattern=_SYMBOL_RE.pattern)
+    combined_score: float = Field(ge=0.0, le=1.0)
+    coverage: float = Field(ge=0.0, le=1.0)
+    business_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    factor_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    price_volume_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    rank_stability: float | None = Field(default=None, ge=0.0, le=1.0)
+    missing_channels: tuple[Literal["business", "factor", "price_volume"], ...] = Field(
+        max_length=3
+    )
+    evidence: tuple[str, ...] = Field(
+        min_length=1,
+        max_length=SIMILARITY_CANDIDATE_SUMMARY_MAX_EVIDENCE,
+    )
+    counterevidence: tuple[str, ...] = Field(
+        min_length=1,
+        max_length=SIMILARITY_CANDIDATE_SUMMARY_MAX_EVIDENCE,
+    )
+
+    @field_validator("evidence", "counterevidence")
+    @classmethod
+    def validate_summary_evidence(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if any(
+            not value.strip() or len(value) > SIMILARITY_CANDIDATE_SUMMARY_MAX_TEXT_LENGTH
+            for value in values
+        ):
+            raise ValueError(
+                "summary evidence entries must contain 1 to "
+                f"{SIMILARITY_CANDIDATE_SUMMARY_MAX_TEXT_LENGTH} characters"
+            )
+        return values
+
+    @model_validator(mode="after")
+    def validate_missing_channels(self) -> "SimilarityCandidateSummary":
+        if len(set(self.missing_channels)) != len(self.missing_channels):
+            raise ValueError("missing_channels must be unique")
+        ordered = tuple(
+            channel for channel in _SUMMARY_CHANNEL_ORDER if channel in self.missing_channels
+        )
+        if self.missing_channels != ordered:
+            raise ValueError("missing_channels must use canonical channel order")
+        expected = tuple(
+            channel
+            for channel, score in (
+                ("business", self.business_score),
+                ("factor", self.factor_score),
+                ("price_volume", self.price_volume_score),
+            )
+            if score is None
+        )
+        if self.missing_channels != expected:
+            raise ValueError("missing_channels must match unavailable channel scores")
+        return self
 
 
 class SimilarityVisualizationPayload(_StrictPresentationModel):

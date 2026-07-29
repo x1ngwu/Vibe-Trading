@@ -106,6 +106,40 @@ def load_visualization_specs(run_dir: Path) -> list[Dict[str, Any]]:
     return specs
 
 
+def _persisted_similarity_history(metadata: Any) -> str:
+    """Expose only validated immutable similarity references to the next turn."""
+    if not isinstance(metadata, dict):
+        return ""
+    raw = metadata.get("visualizations")
+    if not isinstance(raw, list):
+        return ""
+    references: list[str] = []
+    seen: set[str] = set()
+    for item in raw[-5:]:
+        if not isinstance(item, dict) or item.get("type") != "similarity_ranking":
+            continue
+        try:
+            spec = SimilarityVisualizationSpec.model_validate(item)
+        except ValueError:
+            continue
+        if spec.similarity_run_id in seen:
+            continue
+        seen.add(spec.similarity_run_id)
+        references.append(
+            f"- similarity_run_id={spec.similarity_run_id}; "
+            f"visible_candidate_count={spec.candidate_count}; "
+            f"as_of={spec.as_of.isoformat()}"
+        )
+    if not references:
+        return ""
+    return (
+        "<persisted-similarity-results>\n"
+        + "\n".join(references)
+        + "\nReuse an exact ID with show_similarity_result before answering "
+        "candidate-level follow-ups.\n</persisted-similarity-results>"
+    )
+
+
 class SessionService:
     """Session lifecycle service.
 
@@ -399,6 +433,12 @@ class SessionService:
                 continue
             content = re.sub(r"Run directory:\s*\S+", _shorten_run_dir, content).strip()
             if content:
+                metadata = msg.metadata if hasattr(msg, "metadata") else msg.get("metadata", {})
+                similarity_history = (
+                    _persisted_similarity_history(metadata) if role == "assistant" else ""
+                )
+                if similarity_history:
+                    content = f"{content}\n\n{similarity_history}"
                 history.append({"role": role, "content": content})
 
         # Trim from the newest messages within a character budget of roughly 3000 tokens.

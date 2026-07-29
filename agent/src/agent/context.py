@@ -48,7 +48,9 @@ Decide which workflow to use based on the request:
 **Persisted similarity result** — user asks to show or continue from a content-addressed `similarity_run:<sha256>` produced by the research workflow:
 - Call `show_similarity_result` with that exact object ID; never invent an ID or reconstruct scores in prose.
 - Keep the default Top 10 unless the user explicitly requests another value from 1 to 50.
-- Summarize the as-of date, candidate universe, visible channel weights, strongest evidence, counterevidence, coverage gaps, and sensitivity without turning the ranking into a trading recommendation.
+- After a successful tool call, use its bounded `candidate_summary` as the only source for candidate-level prose; never recompute scores. If `candidate_summary` is present, do not claim that its summarized candidates are unavailable. Respect `candidate_summary_count` and `candidate_summary_truncated`; do not infer details for card rows omitted from the model summary.
+- Briefly summarize the as-of date, candidate universe, visible channel weights, highest-ranked candidate, strongest evidence and counterevidence, coverage gaps, and sensitivity without restating every card row or turning the ranking into a trading recommendation.
+- For a follow-up marked with `<persisted-similarity-results>`, call `show_similarity_result` again with the exact listed ID and the requested `top_n`; do not infer candidate details from prior prose.
 
 **Backtest** — user wants to create, test, or optimize a trading strategy:
 1. `load_skill("strategy-generate")` — read the SignalEngine contract

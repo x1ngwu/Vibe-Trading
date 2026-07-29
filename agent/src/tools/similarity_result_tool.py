@@ -12,6 +12,10 @@ from typing import Any
 from src.agent.tools import BaseTool
 from src.research.contracts import ResearchSpec, SimilarityRun, canonical_json
 from src.research.similarity_presentation import (
+    SIMILARITY_CANDIDATE_SUMMARY_MAX_EVIDENCE,
+    SIMILARITY_CANDIDATE_SUMMARY_MAX_ITEMS,
+    SIMILARITY_CANDIDATE_SUMMARY_MAX_TEXT_LENGTH,
+    SimilarityCandidateSummary,
     SimilarityVisualizationCandidate,
     SimilarityVisualizationPayload,
     SimilarityVisualizationSpec,
@@ -22,6 +26,7 @@ from src.tools.path_utils import safe_path, safe_run_dir
 _STABILITY_RE = re.compile(
     r"^sensitivity_summary:([^:]+):.*(?:^|;)mean_rank_stability=([0-9]+(?:\.[0-9]+)?)"
 )
+_MODEL_RESULT_MAX_CHARS = 9_000
 
 
 def _atomic_write_json(path: Path, value: Any) -> None:
@@ -50,6 +55,14 @@ def _rank_stability(notes: tuple[str, ...]) -> dict[str, float]:
             if 0.0 <= value <= 1.0:
                 result[match.group(1)] = value
     return result
+
+
+def _summary_evidence(values: tuple[str, ...]) -> tuple[str, ...]:
+    """Bound already-validated presentation evidence for model context."""
+    return tuple(
+        value[:SIMILARITY_CANDIDATE_SUMMARY_MAX_TEXT_LENGTH]
+        for value in values[:SIMILARITY_CANDIDATE_SUMMARY_MAX_EVIDENCE]
+    )
 
 
 class ShowSimilarityResultTool(BaseTool):
@@ -163,18 +176,52 @@ class ShowSimilarityResultTool(BaseTool):
 
         payload_json = payload.model_dump(mode="json")
         spec_json = spec.model_dump(mode="json")
-        _atomic_write_json(output_path, payload_json)
-        manifest = [item for item in manifest if item.get("visualization_id") != visualization_id]
-        manifest.append(spec_json)
-        _atomic_write_json(manifest_path, manifest[-20:])
-        return json.dumps(
+        summary_candidates = candidates[:SIMILARITY_CANDIDATE_SUMMARY_MAX_ITEMS]
+        candidate_summary = tuple(
+            SimilarityCandidateSummary(
+                rank=candidate.rank,
+                symbol=candidate.symbol,
+                combined_score=candidate.combined_score,
+                coverage=candidate.coverage,
+                business_score=candidate.business_score,
+                factor_score=candidate.factor_score,
+                price_volume_score=candidate.price_volume_score,
+                rank_stability=candidate.rank_stability,
+                missing_channels=tuple(
+                    channel
+                    for channel, score in (
+                        ("business", candidate.business_score),
+                        ("factor", candidate.factor_score),
+                        ("price_volume", candidate.price_volume_score),
+                    )
+                    if score is None
+                ),
+                evidence=_summary_evidence(candidate.evidence),
+                counterevidence=_summary_evidence(candidate.counterevidence),
+            )
+            for candidate in summary_candidates
+        )
+        result_json = json.dumps(
             {
                 "status": "ok",
                 "similarity_run_id": similarity_object.object_id,
                 "candidate_count": len(candidates),
+                "candidate_summary_count": len(candidate_summary),
+                "candidate_summary_truncated": len(candidate_summary) < len(candidates),
+                "candidate_summary": [
+                    candidate.model_dump(mode="json") for candidate in candidate_summary
+                ],
                 "visualizations": [spec_json],
                 "message": "Similarity ranking attached to the chat response.",
             },
             ensure_ascii=False,
             allow_nan=False,
         )
+        if len(result_json) > _MODEL_RESULT_MAX_CHARS:
+            raise ValueError("bounded similarity tool result exceeds the model context limit")
+
+        _atomic_write_json(output_path, payload_json)
+        manifest = [item for item in manifest if item.get("visualization_id") != visualization_id]
+        manifest.append(spec_json)
+        _atomic_write_json(manifest_path, manifest[-20:])
+        return result_json

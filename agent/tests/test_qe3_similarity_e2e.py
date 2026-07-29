@@ -16,7 +16,7 @@ from src.research.contracts import (
 )
 from src.research.store import ResearchStore
 from src.session.events import EventBus
-from src.session.models import Attempt, AttemptStatus
+from src.session.models import Attempt, AttemptStatus, Message
 from src.session.service import SessionService
 from src.session.store import SessionStore
 from src.tools import similarity_result_tool
@@ -129,6 +129,13 @@ def test_two_samples_to_ten_candidates_survives_sse_and_history(
         )
     )
     expected_spec = tool_result["visualizations"][0]
+    assert tool_result["candidate_summary_count"] == 10
+    assert tool_result["candidate_summary_truncated"] is False
+    assert len(tool_result["candidate_summary"]) == 10
+    assert tool_result["candidate_summary"][0]["rank"] == 1
+    assert tool_result["candidate_summary"][4]["rank"] == 5
+    assert tool_result["candidate_summary"][-1]["missing_channels"] == ["price_volume"]
+    assert tool_result["candidate_summary"][-1]["coverage"] == 0.7
 
     monkeypatch.setattr("src.session.service.get_shared_index", lambda: _DummyIndex())
     session_store = SessionStore(tmp_path / "sessions")
@@ -168,6 +175,23 @@ def test_two_samples_to_ten_candidates_survives_sse_and_history(
     assert len(assistant_messages) == 1
     assert assistant_messages[0].metadata["visualizations"] == [expected_spec]
     assert assistant_messages[0].metadata["run_id"] == "qe3-e2e-01"
+    assert "candidate_summary" not in assistant_messages[0].metadata
+
+    follow_up_history = service._convert_messages_to_history(
+        [
+            assistant_messages[0],
+            Message(
+                session_id=session.session_id,
+                role="user",
+                content="缩到 Top 5，比较第 1 名和第 5 名。",
+            ),
+        ]
+    )
+    assert len(follow_up_history) == 1
+    assert similarity.object_id in follow_up_history[0]["content"]
+    assert "<persisted-similarity-results>" in follow_up_history[0]["content"]
+    assert "visible_candidate_count=10" in follow_up_history[0]["content"]
+    assert "Reuse an exact ID with show_similarity_result" in follow_up_history[0]["content"]
 
     payload = json.loads(
         (run_dir / "artifacts" / "visualizations" / f"{expected_spec['visualization_id']}.json")
