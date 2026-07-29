@@ -124,4 +124,3 @@ def allowed_operator(rule: SignalRule, capability: StrategyFieldCapability) -> b
     """Return whether a signal operator belongs to the resolved capability."""
 
     return rule.operator in capability.allowed_operators
-

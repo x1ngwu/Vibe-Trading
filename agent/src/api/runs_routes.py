@@ -366,7 +366,7 @@ def register_runs_routes(
                         strategy_payload,
                         store,
                     )
-            except ValueError:
+            except (ValueError, StrategyVersionStoreIntegrityError):
                 raise HTTPException(status_code=422, detail="invalid visualization payload")
             return JSONResponse(strategy_payload.model_dump(mode="json"))
 

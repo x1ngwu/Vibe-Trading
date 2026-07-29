@@ -182,6 +182,9 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "pytest-socket>=0.7.0",
+    # Starlette >=1.3 TestClient uses the httpx2 transport. Keeping this in
+    # the dev extra avoids shipping a test-only client in the runtime image.
+    "httpx2==2.9.1",
 ]
 
 [tool.pytest.ini_options]

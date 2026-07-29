@@ -428,6 +428,7 @@ class ConfirmStrategyTool(BaseTool):
                 card=card,
                 receipt=receipt,
                 data_basis=_data_basis(source),
+                head_confirmation_hash=receipt.confirmation_hash,
             )
             persist_strategy_visualization(run_dir, spec, payload)
         if self._event_callback is not None:

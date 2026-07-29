@@ -145,6 +145,7 @@ def register_strategy_routes(app: FastAPI) -> None:
                     card=card,
                     receipt=receipt,
                     data_basis=stored.data_basis,
+                    head_confirmation_hash=receipt.confirmation_hash,
                 )
                 persist_strategy_visualization(path.parents[2], spec, payload)
         except ExpiredStrategyConfirmationError as exc:

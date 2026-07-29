@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -457,11 +458,42 @@ def test_authenticated_api_confirms_exact_card_idempotently_and_restores_state(
             linked = await client.get(
                 f"/runs/linked/visualizations/{spec['visualization_id']}"
             )
-            return session_id, before, first, retry, restored, crossed, linked
+            with sqlite3.connect(version_db) as connection:
+                connection.execute(
+                    "UPDATE strategy_heads SET revision=revision + 1 WHERE stream_id=?",
+                    (session_id,),
+                )
+                connection.commit()
+            tampered = await client.get(
+                f"/runs/api-card/visualizations/{spec['visualization_id']}"
+            )
+            with sqlite3.connect(version_db) as connection:
+                connection.execute(
+                    "UPDATE strategy_heads SET revision=revision - 1 WHERE stream_id=?",
+                    (session_id,),
+                )
+                connection.commit()
+            return (
+                session_id,
+                before,
+                first,
+                retry,
+                restored,
+                crossed,
+                linked,
+                tampered,
+            )
 
-    session_id, before, first, retry, restored, crossed, linked = asyncio.run(
-        scenario()
-    )
+    (
+        session_id,
+        before,
+        first,
+        retry,
+        restored,
+        crossed,
+        linked,
+        tampered,
+    ) = asyncio.run(scenario())
 
     assert before.status_code == 200
     assert before.json()["lifecycle_state"] == "awaiting_confirmation"
@@ -472,5 +504,6 @@ def test_authenticated_api_confirms_exact_card_idempotently_and_restores_state(
     assert restored.json()["lifecycle_state"] == "confirmed"
     assert crossed.status_code == 409
     assert linked.status_code == 404
+    assert tampered.status_code == 422
     with StrategyVersionStore(version_db) as store:
         assert len(store.list_events(session_id)) == 3

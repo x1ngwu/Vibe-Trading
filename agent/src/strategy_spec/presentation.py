@@ -142,6 +142,8 @@ class StrategyConfirmationVisualizationPayload(_PresentationModel):
                 or self.receipt.confirmation_hash != self.card.confirmation_hash
             ):
                 raise ValueError("confirmation receipt does not bind the displayed card")
+        if self.lifecycle_state == "confirmed" and self.receipt is None:
+            raise ValueError("confirmed strategy payload requires its canonical receipt")
         return self
 
 
@@ -166,12 +168,18 @@ def build_strategy_visualization(
     card: StrategyConfirmationCard | None = None,
     receipt: StrategyConfirmationReceipt | None = None,
     data_basis: StrategyDataBasis | None = None,
+    head_confirmation_hash: str | None = None,
     now: datetime | None = None,
 ) -> tuple[StrategyConfirmationVisualizationSpec, StrategyConfirmationVisualizationPayload]:
     """Build a mutually bound chat spec and full payload."""
 
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    if head.version_id != version.version_id:
+    if head.version_id != version.version_id or (
+        card is not None
+        and head.state in {"awaiting_confirmation", "confirmed"}
+        and head_confirmation_hash is not None
+        and head_confirmation_hash != card.confirmation_hash
+    ):
         state: StrategyPresentationState = "superseded"
     elif version.draft_status == "needs_clarification":
         state = "needs_clarification"
@@ -229,12 +237,33 @@ def resolve_strategy_visualization(
         if canonical_card is None:
             raise ValueError("strategy confirmation card no longer exists")
         card = canonical_card
+    events = store.list_events(payload.stream_id)
+    current_event = events[-1] if events else None
+    if current_event is None or current_event.event_id != head.event_id:
+        raise ValueError("strategy current event no longer exists")
+    receipt = None
+    if payload.receipt is not None:
+        receipt = store.get_confirmation_receipt(payload.receipt.receipt_id)
+        if receipt is None:
+            raise ValueError("strategy confirmation receipt no longer exists")
+    if (
+        card is not None
+        and head.state == "confirmed"
+        and current_event.confirmation_hash == card.confirmation_hash
+    ):
+        receipt = store.get_confirmation_receipt_for_card(
+            stream_id=payload.stream_id,
+            confirmation_hash=card.confirmation_hash,
+        )
+        if receipt is None:
+            raise ValueError("confirmed strategy has no canonical receipt")
     _, resolved = build_strategy_visualization(
         version=version,
         head=head,
         card=card,
-        receipt=payload.receipt,
+        receipt=receipt,
         data_basis=payload.data_basis,
+        head_confirmation_hash=current_event.confirmation_hash,
         now=now,
     )
     return resolved

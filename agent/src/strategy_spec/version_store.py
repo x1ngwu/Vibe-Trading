@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import stat
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -42,7 +44,8 @@ class StrategyVersionStore:
 
     def __init__(self, db_path: Path | str) -> None:
         self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.db_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        self._validate_storage_paths()
         self._conn = sqlite3.connect(
             str(self.db_path),
             check_same_thread=False,
@@ -55,6 +58,52 @@ class StrategyVersionStore:
         self._conn.execute("PRAGMA synchronous=FULL")
         self._lock = threading.RLock()
         self._init_db()
+        self._secure_storage_files()
+
+    def _storage_paths(self) -> tuple[Path, ...]:
+        return (
+            self.db_path,
+            Path(f"{self.db_path}-wal"),
+            Path(f"{self.db_path}-shm"),
+        )
+
+    def _validate_storage_paths(self) -> None:
+        if self.db_path.parent.is_symlink():
+            raise StrategyVersionStoreIntegrityError(
+                "strategy version database directory must not be a symlink"
+            )
+        for path in self._storage_paths():
+            if path.is_symlink():
+                raise StrategyVersionStoreIntegrityError(
+                    "strategy version database files must not be symlinks"
+                )
+            try:
+                mode = path.stat().st_mode
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISREG(mode):
+                raise StrategyVersionStoreIntegrityError(
+                    "strategy version database path must be a regular file"
+                )
+
+    def _secure_storage_files(self) -> None:
+        self._validate_storage_paths()
+        for path in self._storage_paths():
+            try:
+                descriptor = os.open(
+                    path,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                )
+            except FileNotFoundError:
+                continue
+            try:
+                if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                    raise StrategyVersionStoreIntegrityError(
+                        "strategy version database path must be a regular file"
+                    )
+                os.fchmod(descriptor, 0o600)
+            finally:
+                os.close(descriptor)
 
     def _init_db(self) -> None:
         with self._lock:
@@ -144,6 +193,7 @@ class StrategyVersionStore:
         self._conn.execute("BEGIN IMMEDIATE")
         try:
             yield
+            self._secure_storage_files()
         except Exception:
             self._conn.rollback()
             raise
@@ -166,6 +216,7 @@ class StrategyVersionStore:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+            self._secure_storage_files()
 
     def __enter__(self) -> "StrategyVersionStore":
         return self
@@ -616,8 +667,8 @@ class StrategyVersionStore:
     ) -> StrategyConfirmationReceipt | None:
         row = self._conn.execute(
             """
-            SELECT stream_id, version_id, confirmation_hash, idempotency_key,
-                   actor_id, payload_json
+            SELECT receipt_id, stream_id, version_id, confirmation_hash,
+                   idempotency_key, actor_id, payload_json
             FROM strategy_confirmation_receipts
             WHERE stream_id=? AND idempotency_key=?
             """,
@@ -625,12 +676,13 @@ class StrategyVersionStore:
         ).fetchone()
         if row is None:
             return None
-        receipt = self._parse(
-            StrategyConfirmationReceipt,
-            row["payload_json"],
-        )
+        return self._receipt_from_row(row)
+
+    def _receipt_from_row(self, row: sqlite3.Row) -> StrategyConfirmationReceipt:
+        receipt = self._parse(StrategyConfirmationReceipt, row["payload_json"])
         if (
-            receipt.stream_id != row["stream_id"]
+            receipt.receipt_id != row["receipt_id"]
+            or receipt.stream_id != row["stream_id"]
             or receipt.version_id != row["version_id"]
             or receipt.confirmation_hash != row["confirmation_hash"]
             or receipt.idempotency_key != row["idempotency_key"]
@@ -648,7 +700,8 @@ class StrategyVersionStore:
         with self._lock:
             row = self._conn.execute(
                 """
-                SELECT payload_json
+                SELECT receipt_id, stream_id, version_id, confirmation_hash,
+                       idempotency_key, actor_id, payload_json
                 FROM strategy_confirmation_receipts
                 WHERE receipt_id=?
                 """,
@@ -656,15 +709,29 @@ class StrategyVersionStore:
             ).fetchone()
             if row is None:
                 return None
-            receipt = self._parse(
-                StrategyConfirmationReceipt,
-                row["payload_json"],
-            )
-            if receipt.receipt_id != receipt_id:
-                raise StrategyVersionStoreIntegrityError(
-                    "confirmation receipt ID does not match payload"
-                )
-            return receipt
+            return self._receipt_from_row(row)
+
+    def get_confirmation_receipt_for_card(
+        self,
+        *,
+        stream_id: str,
+        confirmation_hash: str,
+    ) -> StrategyConfirmationReceipt | None:
+        """Return the canonical receipt for one exact stream/card pair."""
+
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT receipt_id, stream_id, version_id, confirmation_hash,
+                       idempotency_key, actor_id, payload_json
+                FROM strategy_confirmation_receipts
+                WHERE stream_id=? AND confirmation_hash=?
+                """,
+                (stream_id, confirmation_hash),
+            ).fetchone()
+            if row is None:
+                return None
+            return self._receipt_from_row(row)
 
     def confirm(
         self,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import stat
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -24,6 +25,11 @@ from src.strategy_spec import (
     StrategyVersionStoreIntegrityError,
     StrategyTemplateSource,
     draft_strategy_from_language,
+)
+from src.strategy_spec.presentation import (
+    StrategyDataBasis,
+    build_strategy_visualization,
+    resolve_strategy_visualization,
 )
 
 _T0 = datetime(2026, 7, 29, 10, 0, tzinfo=timezone.utc)
@@ -250,6 +256,84 @@ def test_nl09_confirm_creates_receipt_and_append_only_confirmed_event(
             "awaiting_confirmation",
             "confirmed",
         )
+
+
+def test_visualization_resolution_binds_current_card_hash_and_canonical_receipt(
+    tmp_path: Path,
+) -> None:
+    source = _source()
+    snapshot = DataSnapshotRef.model_validate(source.snapshot.payload)
+    data_basis = StrategyDataBasis.from_snapshot(source.snapshot.ref(), snapshot)
+    with StrategyVersionStore(tmp_path / "versions.db") as store:
+        version, initial = _create_ready(store)
+        first_card, first_head = _prepare(
+            store,
+            initial,
+            lifetime=timedelta(minutes=1),
+        )
+        _, first_payload = build_strategy_visualization(
+            version=version,
+            head=first_head,
+            card=first_card,
+            data_basis=data_basis,
+            now=_T0 + timedelta(minutes=1),
+        )
+        second_card, second_head = store.prepare_confirmation(
+            stream_id=initial.stream_id,
+            expected_head=first_head,
+            issued_at=first_card.expires_at,
+            expires_at=first_card.expires_at + timedelta(minutes=10),
+        )
+        _, second_payload = build_strategy_visualization(
+            version=version,
+            head=second_head,
+            card=second_card,
+            data_basis=data_basis,
+            now=first_card.expires_at,
+        )
+        receipt = store.confirm(
+            stream_id=initial.stream_id,
+            expected_head=second_head,
+            confirmation_hash=second_card.confirmation_hash,
+            idempotency_key="confirm-renewed-card",
+            actor_id="household-user",
+            confirmed_at=first_card.expires_at + timedelta(minutes=1),
+        )
+
+        old_resolved = resolve_strategy_visualization(
+            first_payload,
+            store,
+            now=first_card.expires_at + timedelta(minutes=1),
+        )
+        current_resolved = resolve_strategy_visualization(
+            second_payload,
+            store,
+            now=first_card.expires_at + timedelta(minutes=1),
+        )
+
+        assert old_resolved.lifecycle_state == "superseded"
+        assert old_resolved.receipt is None
+        assert current_resolved.lifecycle_state == "confirmed"
+        assert current_resolved.receipt == receipt
+
+
+def test_strategy_version_store_rejects_symlinks_and_secures_database_files(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "versions.db"
+    with StrategyVersionStore(db_path) as store:
+        _create_ready(store)
+        assert stat.S_IMODE(db_path.stat().st_mode) == 0o600
+        for sidecar in (Path(f"{db_path}-wal"), Path(f"{db_path}-shm")):
+            if sidecar.exists():
+                assert stat.S_IMODE(sidecar.stat().st_mode) == 0o600
+
+    outside = tmp_path / "outside.db"
+    outside.touch()
+    linked = tmp_path / "linked.db"
+    linked.symlink_to(outside)
+    with pytest.raises(StrategyVersionStoreIntegrityError, match="symlink"):
+        StrategyVersionStore(linked)
 
 
 def test_nl09_duplicate_confirmation_key_returns_same_receipt_once(
