@@ -2,6 +2,7 @@ import type {
   CandlestickVisualizationSpec,
   SimilarityChannelWeights,
   SimilarityRankingVisualizationSpec,
+  StrategyConfirmationVisualizationSpec,
   VisualizationSpec,
 } from "@/types/agent";
 
@@ -10,6 +11,9 @@ const SHA256 = /^[0-9a-f]{64}$/;
 const SIMILARITY_RUN_ID = /^similarity_run:([0-9a-f]{64})$/;
 const SYMBOL = /^[A-Z0-9][A-Z0-9._-]{0,31}$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const STRATEGY_VERSION_ID = /^strategy-version:[0-9a-f]{64}$/;
+const STRATEGY_EVENT_ID = /^strategy-state:[0-9a-f]{64}$/;
+const STREAM_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 function isIsoDate(value: unknown): value is string {
   if (typeof value !== "string" || !ISO_DATE.test(value)) return false;
@@ -123,6 +127,53 @@ function parseSimilaritySpec(raw: Record<string, unknown>): SimilarityRankingVis
   return spec;
 }
 
+function parseStrategySpec(raw: Record<string, unknown>): StrategyConfirmationVisualizationSpec | null {
+  const parent = raw.parent_version_id;
+  const confirmationHash = raw.confirmation_hash;
+  if (
+    raw.type !== "strategy_confirmation"
+    || typeof raw.visualization_id !== "string"
+    || !SAFE_ID.test(raw.visualization_id)
+    || raw.data_ref !== raw.visualization_id
+    || typeof raw.title !== "string"
+    || !raw.title.trim()
+    || raw.title.length > 200
+    || typeof raw.stream_id !== "string"
+    || !STREAM_ID.test(raw.stream_id)
+    || typeof raw.version_id !== "string"
+    || !STRATEGY_VERSION_ID.test(raw.version_id)
+    || typeof raw.version_number !== "number"
+    || !Number.isInteger(raw.version_number)
+    || raw.version_number < 1
+    || (parent !== null && (typeof parent !== "string" || !STRATEGY_VERSION_ID.test(parent)))
+    || (raw.version_number === 1 ? parent !== null : parent === null)
+    || typeof raw.head_event_id !== "string"
+    || !STRATEGY_EVENT_ID.test(raw.head_event_id)
+    || typeof raw.head_revision !== "number"
+    || !Number.isInteger(raw.head_revision)
+    || raw.head_revision < 1
+    || (confirmationHash !== null && (typeof confirmationHash !== "string" || !SHA256.test(confirmationHash)))
+    || typeof raw.fallback_text !== "string"
+    || !raw.fallback_text.trim()
+    || raw.fallback_text.length > 500
+  ) return null;
+  return {
+    schema_version: 1,
+    type: "strategy_confirmation",
+    visualization_id: raw.visualization_id,
+    data_ref: raw.data_ref as string,
+    title: raw.title,
+    stream_id: raw.stream_id,
+    version_id: raw.version_id,
+    version_number: raw.version_number,
+    parent_version_id: parent as string | null,
+    head_event_id: raw.head_event_id,
+    head_revision: raw.head_revision,
+    confirmation_hash: confirmationHash as string | null,
+    fallback_text: raw.fallback_text,
+  };
+}
+
 export function parseVisualizationSpecs(value: unknown): VisualizationSpec[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item): VisualizationSpec[] => {
@@ -131,7 +182,9 @@ export function parseVisualizationSpecs(value: unknown): VisualizationSpec[] {
     if (raw.schema_version !== 1) return [];
     const spec = raw.type === "similarity_ranking"
       ? parseSimilaritySpec(raw)
-      : parseCandlestickSpec(raw);
+      : raw.type === "strategy_confirmation"
+        ? parseStrategySpec(raw)
+        : parseCandlestickSpec(raw);
     return spec ? [spec] : [];
   }).slice(0, 5);
 }

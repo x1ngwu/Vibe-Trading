@@ -197,6 +197,10 @@ from src.api.sessions_routes import (  # noqa: F401, E402
     _mandate_proposal_frame_from_tool_result,
 )
 
+# --- Strategy confirmation ---
+from src.api.strategy_routes import register_strategy_routes  # noqa: E402
+register_strategy_routes(app)
+
 # --- System ---
 from src.api.system_routes import register_system_routes  # noqa: E402
 register_system_routes(app)

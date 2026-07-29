@@ -24,6 +24,7 @@ from .versioning import (
     StrategyStateEvent,
     StrategyVersion,
     StrategyVersionError,
+    StrategyVersionSource,
     create_strategy_confirmation_card,
     create_strategy_confirmation_receipt,
     create_strategy_state_event,
@@ -423,6 +424,7 @@ class StrategyVersionStore:
         stream_id: str,
         owner_scope: str,
         result: StrategyDraftResult,
+        source_context: StrategyVersionSource | None = None,
         created_at: datetime | None = None,
     ) -> tuple[StrategyVersion, StrategyHeadToken]:
         version = create_strategy_version(
@@ -430,6 +432,7 @@ class StrategyVersionStore:
             owner_scope=owner_scope,
             version_number=1,
             result=result,
+            source_context=source_context,
             created_at=created_at,
         )
         event = create_strategy_state_event(
@@ -456,6 +459,7 @@ class StrategyVersionStore:
         stream_id: str,
         expected_head: StrategyHeadToken,
         result: StrategyDraftResult,
+        source_context: StrategyVersionSource | None = None,
         created_at: datetime | None = None,
     ) -> tuple[StrategyVersion, StrategyHeadToken]:
         with self._lock, self._write_transaction():
@@ -473,6 +477,7 @@ class StrategyVersionStore:
                 owner_scope=parent.owner_scope,
                 version_number=parent.version_number + 1,
                 result=result,
+                source_context=source_context,
                 parent=parent,
                 created_at=created_at,
             )

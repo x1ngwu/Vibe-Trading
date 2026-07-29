@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { AlertTriangle, BarChart3, Maximize2, RefreshCw, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { CandlestickChart, isIntradayTimeframe } from "@/components/charts/CandlestickChart";
+import { StrategyConfirmationCard } from "@/components/visualizations/StrategyConfirmationCard";
 import { api, type RunVisualization, type SimilarityRunVisualization } from "@/lib/api";
 import { getChartTheme } from "@/lib/chart-theme";
 import { abbreviateNum } from "@/lib/formatters";
@@ -500,7 +501,8 @@ export function VisualizationRenderer({ runId, visualizations = [] }: RendererPr
   const [activeIndex, setActiveIndex] = useState(0);
   const charts = visualizations.filter((item) => item.type === "candlestick_volume");
   const rankings = visualizations.filter((item) => item.type === "similarity_ranking");
-  if (!runId || (charts.length === 0 && rankings.length === 0)) return null;
+  const strategies = visualizations.filter((item) => item.type === "strategy_confirmation");
+  if (!runId || (charts.length === 0 && rankings.length === 0 && strategies.length === 0)) return null;
   const safeIndex = Math.min(activeIndex, Math.max(0, charts.length - 1));
 
   return (
@@ -533,6 +535,13 @@ export function VisualizationRenderer({ runId, visualizations = [] }: RendererPr
       )}
       {rankings.map((spec) => (
         <SimilarityPanel
+          key={`${runId}:${spec.visualization_id}`}
+          runId={runId}
+          spec={spec}
+        />
+      ))}
+      {strategies.map((spec) => (
+        <StrategyConfirmationCard
           key={`${runId}:${spec.visualization_id}`}
           runId={runId}
           spec={spec}

@@ -97,4 +97,48 @@ describe("parseVisualizationSpecs", () => {
       { ...valid, as_of: "2026-02-31" },
     ])).toEqual([]);
   });
+
+  it("keeps only a complete, session-bound strategy confirmation spec", () => {
+    const version = `strategy-version:${"a".repeat(64)}`;
+    const event = `strategy-state:${"b".repeat(64)}`;
+    const hash = "c".repeat(64);
+    const valid = {
+      schema_version: 1,
+      type: "strategy_confirmation",
+      visualization_id: "strategy_demo",
+      data_ref: "strategy_demo",
+      title: "低波动月度策略",
+      stream_id: "session-demo",
+      version_id: version,
+      version_number: 1,
+      parent_version_id: null,
+      head_event_id: event,
+      head_revision: 2,
+      confirmation_hash: hash,
+      fallback_text: "策略确认卡不可用",
+      ignored: "must-not-survive",
+    };
+    expect(parseVisualizationSpecs([valid])).toEqual([{
+      schema_version: 1,
+      type: "strategy_confirmation",
+      visualization_id: "strategy_demo",
+      data_ref: "strategy_demo",
+      title: "低波动月度策略",
+      stream_id: "session-demo",
+      version_id: version,
+      version_number: 1,
+      parent_version_id: null,
+      head_event_id: event,
+      head_revision: 2,
+      confirmation_hash: hash,
+      fallback_text: "策略确认卡不可用",
+    }]);
+    expect(parseVisualizationSpecs([
+      { ...valid, stream_id: "../other" },
+      { ...valid, version_id: `strategy-version:${"d".repeat(63)}` },
+      { ...valid, parent_version_id: `strategy-version:${"e".repeat(64)}` },
+      { ...valid, confirmation_hash: "short" },
+      { ...valid, data_ref: "other" },
+    ])).toEqual([]);
+  });
 });

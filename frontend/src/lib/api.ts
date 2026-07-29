@@ -99,6 +99,16 @@ export const api = {
       `/runs/${encodeURIComponent(runId)}/visualizations/${encodeURIComponent(visualizationId)}`,
       { signal },
     ),
+  confirmStrategy: (
+    sessionId: string,
+    runId: string,
+    visualizationId: string,
+    body: ConfirmStrategyRequest,
+  ) => request<StrategyConfirmationRunVisualization>(
+    `/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}`
+      + `/strategy-confirmations/${encodeURIComponent(visualizationId)}/confirm`,
+    { method: "POST", body: JSON.stringify(body) },
+  ),
   listSessions: () => request<SessionItem[]>("/sessions"),
   createSession: (title?: string) => request<SessionItem>("/sessions", { method: "POST", body: JSON.stringify({ title: title || "" }) }),
   deleteSession: (sid: string) => request<{ status: string }>(`/sessions/${sid}`, { method: "DELETE" }),
@@ -424,9 +434,186 @@ export interface SimilarityRunVisualization {
   excluded_symbol_count: number;
 }
 
+export interface StrategyHeadToken {
+  stream_id: string;
+  version_id: string;
+  event_id: string;
+  revision: number;
+  state: "draft" | "needs_clarification" | "awaiting_confirmation" | "confirmed";
+}
+
+export interface StrategyObjectRef {
+  schema_version: "1.0";
+  object_type: string;
+  object_id: string;
+  content_sha256: string;
+}
+
+export interface StrategyDataBasis {
+  snapshot_ref: StrategyObjectRef;
+  as_of: string;
+  start_date: string;
+  end_date: string;
+  frequency: "1d";
+  adjustment: "raw" | "qfq" | "hfq";
+  requested_sources: string[];
+  actual_sources: Record<string, string>;
+  anomalies: string[];
+}
+
+export interface StrategyDiffEntry {
+  path: string;
+  kind: "add" | "remove" | "replace";
+  before_json: string | null;
+  after_json: string | null;
+}
+
+export interface StrategyDefaultDisclosure {
+  path: string;
+  value_json: string;
+  reason: string;
+}
+
+export interface StrategyClarification {
+  code: string;
+  path: string;
+  question: string;
+  options: string[];
+}
+
+export interface StrategySecurityWarning {
+  rule_id: string;
+  severity: "medium" | "high";
+  field: string;
+  message: string;
+}
+
+export interface StrategySpecPayload {
+  object_type: "strategy_spec";
+  research_spec_ref: StrategyObjectRef | null;
+  similarity_run_ref: StrategyObjectRef | null;
+  data_snapshot_ref: StrategyObjectRef;
+  title: string;
+  universe_symbols: string[];
+  signals: Array<{
+    field: string;
+    operator: string;
+    value: number | string;
+    lookback_days: number;
+    consecutive_days: number;
+  }>;
+  ranking: {
+    field: string;
+    direction: "ascending" | "descending";
+    top_n: number;
+  } | null;
+  portfolio: {
+    weighting: "equal";
+    max_positions: number;
+    max_position_weight: number;
+    cash_buffer_weight: number;
+  };
+  execution: {
+    signal_price: "close";
+    fill_price: "next_open" | "next_vwap";
+    signal_lag_bars: number;
+    rebalance: "daily" | "weekly" | "monthly";
+    enforce_t_plus_one: boolean;
+    board_lot: number;
+  };
+  costs: {
+    commission_bps: number;
+    minimum_commission: number;
+    sell_tax_bps: number;
+    transfer_fee_bps: number;
+    slippage_bps: number;
+    rule_version: string;
+  };
+  risk: {
+    max_drawdown_stop: number;
+    max_turnover: number;
+  };
+  evaluation: {
+    train_end: string;
+    validation_end: string;
+    test_end: string;
+    benchmark: string;
+    walk_forward: boolean;
+  };
+}
+
+export interface StrategyVersionPayload {
+  version_id: string;
+  content_sha256: string;
+  stream_id: string;
+  owner_scope: string;
+  version_number: number;
+  parent_version_id: string | null;
+  draft_status: "ready" | "needs_clarification";
+  proposal: Record<string, unknown>;
+  strategy_spec_ref: StrategyObjectRef | null;
+  strategy: StrategySpecPayload | null;
+  defaults: StrategyDefaultDisclosure[];
+  clarifications: StrategyClarification[];
+  security_warnings: StrategySecurityWarning[];
+  diff: StrategyDiffEntry[];
+  created_at: string;
+}
+
+export interface StrategyConfirmationCardPayload {
+  card_id: string;
+  confirmation_hash: string;
+  stream_id: string;
+  version_id: string;
+  version_number: number;
+  parent_version_id: string | null;
+  strategy_spec_ref: StrategyObjectRef;
+  strategy: StrategySpecPayload;
+  defaults: StrategyDefaultDisclosure[];
+  security_warnings: StrategySecurityWarning[];
+  diff: StrategyDiffEntry[];
+  issued_at: string;
+  expires_at: string;
+}
+
+export interface StrategyConfirmationReceiptPayload {
+  receipt_id: string;
+  stream_id: string;
+  version_id: string;
+  confirmation_hash: string;
+  idempotency_key: string;
+  actor_id: string;
+  confirmed_at: string;
+}
+
+export interface StrategyConfirmationRunVisualization {
+  schema_version: 1;
+  visualization_id: string;
+  type: "strategy_confirmation";
+  stream_id: string;
+  lifecycle_state:
+    | "needs_clarification"
+    | "awaiting_confirmation"
+    | "confirmed"
+    | "expired"
+    | "superseded";
+  version: StrategyVersionPayload;
+  head: StrategyHeadToken;
+  data_basis: StrategyDataBasis | null;
+  card: StrategyConfirmationCardPayload | null;
+  receipt: StrategyConfirmationReceiptPayload | null;
+}
+
+export interface ConfirmStrategyRequest {
+  expected_head: StrategyHeadToken;
+  confirmation_hash: string;
+  idempotency_key: string;
+}
+
 export type RunVisualization =
   | CandlestickRunVisualization
-  | SimilarityRunVisualization;
+  | SimilarityRunVisualization
+  | StrategyConfirmationRunVisualization;
 
 export interface TradeMarker {
   time: string;

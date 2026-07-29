@@ -16,6 +16,15 @@ from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 
 from src.research.similarity_presentation import SimilarityVisualizationPayload
+from src.strategy_spec.presentation import (
+    StrategyConfirmationVisualizationPayload,
+    default_strategy_version_db_path,
+    resolve_strategy_visualization,
+)
+from src.strategy_spec.version_store import (
+    StrategyVersionStore,
+    StrategyVersionStoreIntegrityError,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -310,7 +319,22 @@ def register_runs_routes(
             / "visualizations"
             / f"{visualization_id}.json"
         )
-        if not visualization_path.is_file():
+        run_root = _host_RUNS_DIR().resolve()
+        path_chain = (
+            visualization_path.parent.parent.parent,
+            visualization_path.parent.parent,
+            visualization_path.parent,
+            visualization_path,
+        )
+        try:
+            resolved_visualization = visualization_path.resolve(strict=True)
+        except OSError:
+            raise HTTPException(status_code=404, detail="visualization not found")
+        if (
+            run_root not in resolved_visualization.parents
+            or any(item.is_symlink() for item in path_chain)
+            or not visualization_path.is_file()
+        ):
             raise HTTPException(status_code=404, detail="visualization not found")
         try:
             if visualization_path.stat().st_size > 5_000_000:
@@ -324,11 +348,27 @@ def register_runs_routes(
         if isinstance(payload, dict) and payload.get("type") == "similarity_ranking":
             try:
                 similarity_payload = SimilarityVisualizationPayload.model_validate(payload)
-            except ValueError:
+            except (ValueError, StrategyVersionStoreIntegrityError):
                 raise HTTPException(status_code=422, detail="invalid visualization payload")
             if similarity_payload.visualization_id != visualization_id:
                 raise HTTPException(status_code=422, detail="invalid visualization payload")
             return JSONResponse(similarity_payload.model_dump(mode="json"))
+
+        if isinstance(payload, dict) and payload.get("type") == "strategy_confirmation":
+            try:
+                strategy_payload = StrategyConfirmationVisualizationPayload.model_validate(
+                    payload
+                )
+                if strategy_payload.visualization_id != visualization_id:
+                    raise ValueError("visualization identity mismatch")
+                with StrategyVersionStore(default_strategy_version_db_path()) as store:
+                    strategy_payload = resolve_strategy_visualization(
+                        strategy_payload,
+                        store,
+                    )
+            except ValueError:
+                raise HTTPException(status_code=422, detail="invalid visualization payload")
+            return JSONResponse(strategy_payload.model_dump(mode="json"))
 
         if (
             not isinstance(payload, dict)

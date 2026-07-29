@@ -25,7 +25,13 @@ from src.session.models import (
 )
 from src.session.search import get_shared_index
 from src.session.store import SessionStore
+from src.research.contracts import canonical_json
 from src.research.similarity_presentation import SimilarityVisualizationSpec
+from src.strategy_spec.presentation import (
+    StrategyConfirmationVisualizationSpec,
+    default_strategy_version_db_path,
+)
+from src.strategy_spec.version_store import StrategyVersionStore
 
 
 _VISUALIZATION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -69,6 +75,16 @@ def load_visualization_specs(run_dir: Path) -> list[Dict[str, Any]]:
             try:
                 specs.append(
                     SimilarityVisualizationSpec.model_validate(item).model_dump(mode="json")
+                )
+            except ValueError:
+                pass
+            continue
+        if item.get("type") == "strategy_confirmation":
+            try:
+                specs.append(
+                    StrategyConfirmationVisualizationSpec.model_validate(
+                        item
+                    ).model_dump(mode="json")
                 )
             except ValueError:
                 pass
@@ -137,6 +153,60 @@ def _persisted_similarity_history(metadata: Any) -> str:
         + "\n".join(references)
         + "\nReuse an exact ID with show_similarity_result before answering "
         "candidate-level follow-ups.\n</persisted-similarity-results>"
+    )
+
+
+def _persisted_strategy_history(metadata: Any, *, session_id: str) -> str:
+    """Resolve trusted card metadata to the canonical current session head."""
+
+    if not isinstance(metadata, dict):
+        return ""
+    raw = metadata.get("visualizations")
+    if not isinstance(raw, list):
+        return ""
+    candidates: list[StrategyConfirmationVisualizationSpec] = []
+    for item in raw[-5:]:
+        if not isinstance(item, dict) or item.get("type") != "strategy_confirmation":
+            continue
+        try:
+            spec = StrategyConfirmationVisualizationSpec.model_validate(item)
+        except ValueError:
+            continue
+        if spec.stream_id == session_id:
+            candidates.append(spec)
+    if not candidates:
+        return ""
+    try:
+        with StrategyVersionStore(default_strategy_version_db_path()) as store:
+            head = store.get_head(session_id)
+            if head is None:
+                return ""
+            version = store.get_version(head.version_id)
+            if version is None:
+                return ""
+            events = store.list_events(session_id)
+            current_event = events[-1] if events else None
+    except Exception:
+        return ""
+    confirmation_hash = (
+        current_event.confirmation_hash if current_event is not None else None
+    )
+    proposal_json = canonical_json(version.proposal)[:6_000]
+    return (
+        "<persisted-strategy-version>\n"
+        f"stream_id={session_id}\n"
+        f"version_id={version.version_id}\n"
+        f"version_number={version.version_number}\n"
+        f"state={head.state}\n"
+        f"event_id={head.event_id}\n"
+        f"revision={head.revision}\n"
+        f"confirmation_hash={confirmation_hash or ''}\n"
+        f"proposal_json={proposal_json}\n"
+        "For a modification call draft_strategy with this exact expected_head "
+        "and a complete replacement proposal. For an explicit confirmation call "
+        "confirm_strategy with this exact expected_head/hash and a fresh "
+        "idempotency key. Never reuse this block in another session.\n"
+        "</persisted-strategy-version>"
     )
 
 
@@ -439,6 +509,20 @@ class SessionService:
                 )
                 if similarity_history:
                     content = f"{content}\n\n{similarity_history}"
+                strategy_history = (
+                    _persisted_strategy_history(
+                        metadata,
+                        session_id=(
+                            msg.session_id
+                            if hasattr(msg, "session_id")
+                            else str(msg.get("session_id") or "")
+                        ),
+                    )
+                    if role == "assistant"
+                    else ""
+                )
+                if strategy_history:
+                    content = f"{content}\n\n{strategy_history}"
                 history.append({"role": role, "content": content})
 
         # Trim from the newest messages within a character budget of roughly 3000 tokens.

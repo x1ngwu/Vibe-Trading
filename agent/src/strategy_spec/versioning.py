@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any, Literal, Mapping
 
@@ -10,6 +11,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    field_validator,
     model_validator,
 )
 
@@ -108,6 +110,37 @@ class StrategyDiffEntry(_VersionModel):
         return self
 
 
+class StrategyVersionSource(_VersionModel):
+    """Immutable source chain retained even for clarification-only drafts."""
+
+    research_spec_ref: ObjectRef
+    data_snapshot_ref: ObjectRef
+    similarity_run_ref: ObjectRef | None = None
+    universe_symbols: tuple[str, ...] = Field(min_length=1, max_length=500)
+
+    @field_validator("universe_symbols")
+    @classmethod
+    def validate_universe(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if any(not re.fullmatch(r"[A-Z0-9][A-Z0-9._-]{0,31}", value) for value in values):
+            raise ValueError("version source universe contains an invalid symbol")
+        return values
+
+    @model_validator(mode="after")
+    def validate_refs(self) -> "StrategyVersionSource":
+        if self.research_spec_ref.object_type != "research_spec":
+            raise ValueError("version source research ref has the wrong type")
+        if self.data_snapshot_ref.object_type != "data_snapshot_ref":
+            raise ValueError("version source snapshot ref has the wrong type")
+        if (
+            self.similarity_run_ref is not None
+            and self.similarity_run_ref.object_type != "similarity_run"
+        ):
+            raise ValueError("version source similarity ref has the wrong type")
+        if len(set(self.universe_symbols)) != len(self.universe_symbols):
+            raise ValueError("version source universe contains duplicates")
+        return self
+
+
 class StrategyVersion(_VersionModel):
     """Immutable semantic draft version; lifecycle state is stored separately."""
 
@@ -125,6 +158,7 @@ class StrategyVersion(_VersionModel):
     request_sha256: str = Field(pattern=_SHA256_PATTERN)
     model_response_sha256: str = Field(pattern=_SHA256_PATTERN)
     proposal: StrategyDraftProposal
+    source_context: StrategyVersionSource | None = None
     strategy_spec_ref: ObjectRef | None = None
     strategy: StrategySpec | None = None
     defaults: tuple[DraftDefaultDisclosure, ...] = ()
@@ -159,6 +193,13 @@ class StrategyVersion(_VersionModel):
             assert self.strategy is not None
             if self.strategy.data_snapshot_ref.object_type != "data_snapshot_ref":
                 raise ValueError("strategy snapshot ref has the wrong object type")
+            if self.source_context is not None and (
+                self.strategy.research_spec_ref != self.source_context.research_spec_ref
+                or self.strategy.data_snapshot_ref != self.source_context.data_snapshot_ref
+                or self.strategy.similarity_run_ref != self.source_context.similarity_run_ref
+                or self.strategy.universe_symbols != self.source_context.universe_symbols
+            ):
+                raise ValueError("strategy content does not match its immutable source context")
         material = strategy_version_material(self)
         expected = canonical_sha256(material)
         if self.content_sha256 != expected:
@@ -386,6 +427,7 @@ def _diff_values(
 
 def _semantic_document_from_result(
     result: StrategyDraftResult,
+    source_context: StrategyVersionSource | None = None,
 ) -> Mapping[str, Any]:
     strategy = (
         result.build.strategy_object.payload.model_dump(mode="json")
@@ -395,6 +437,11 @@ def _semantic_document_from_result(
     return {
         "draft_status": result.status,
         "proposal": result.proposal.model_dump(mode="json"),
+        "source_context": (
+            source_context.model_dump(mode="json")
+            if source_context is not None
+            else None
+        ),
         "strategy": strategy,
         "defaults": [
             item.model_dump(mode="json") for item in result.defaults
@@ -411,12 +458,19 @@ def _semantic_document_from_result(
 def diff_strategy_results(
     before: StrategyVersion,
     after: StrategyDraftResult,
+    *,
+    source_context: StrategyVersionSource | None = None,
 ) -> tuple[StrategyDiffEntry, ...]:
     """Return a stable leaf diff from an existing version to a new result."""
 
     before_document = {
         "draft_status": before.draft_status,
         "proposal": before.proposal.model_dump(mode="json"),
+        "source_context": (
+            before.source_context.model_dump(mode="json")
+            if before.source_context is not None
+            else None
+        ),
         "strategy": (
             before.strategy.model_dump(mode="json")
             if before.strategy is not None
@@ -435,7 +489,7 @@ def diff_strategy_results(
     output: list[StrategyDiffEntry] = []
     _diff_values(
         before_document,
-        _semantic_document_from_result(after),
+        _semantic_document_from_result(after, source_context),
         path="$",
         output=output,
     )
@@ -448,6 +502,7 @@ def create_strategy_version(
     owner_scope: str,
     version_number: int,
     result: StrategyDraftResult,
+    source_context: StrategyVersionSource | None = None,
     parent: StrategyVersion | None = None,
     created_at: datetime | None = None,
 ) -> StrategyVersion:
@@ -472,7 +527,18 @@ def create_strategy_version(
         strategy_ref = strategy_object.ref()
         assert isinstance(strategy_object.payload, StrategySpec)
         strategy = strategy_object.payload
-    diff = diff_strategy_results(parent, result) if parent is not None else ()
+    effective_source = source_context or (
+        parent.source_context if parent is not None else None
+    )
+    diff = (
+        diff_strategy_results(
+            parent,
+            result,
+            source_context=effective_source,
+        )
+        if parent is not None
+        else ()
+    )
     payload = {
         "schema_version": STRATEGY_VERSION_SCHEMA,
         "stream_id": stream_id,
@@ -483,6 +549,11 @@ def create_strategy_version(
         "request_sha256": result.request_sha256,
         "model_response_sha256": result.model_response_sha256,
         "proposal": result.proposal.model_dump(mode="json"),
+        "source_context": (
+            effective_source.model_dump(mode="json")
+            if effective_source is not None
+            else None
+        ),
         "strategy_spec_ref": (
             strategy_ref.model_dump(mode="json") if strategy_ref else None
         ),

@@ -85,9 +85,26 @@ export interface SimilarityRankingVisualizationSpec {
   fallback_text?: string;
 }
 
+export interface StrategyConfirmationVisualizationSpec {
+  schema_version: 1;
+  type: "strategy_confirmation";
+  visualization_id: string;
+  data_ref: string;
+  title: string;
+  stream_id: string;
+  version_id: string;
+  version_number: number;
+  parent_version_id: string | null;
+  head_event_id: string;
+  head_revision: number;
+  confirmation_hash: string | null;
+  fallback_text: string;
+}
+
 export type VisualizationSpec =
   | CandlestickVisualizationSpec
-  | SimilarityRankingVisualizationSpec;
+  | SimilarityRankingVisualizationSpec
+  | StrategyConfirmationVisualizationSpec;
 export interface AgentMessage {
   id: string;
   type: AgentMessageType;

@@ -52,7 +52,18 @@ Decide which workflow to use based on the request:
 - Briefly summarize the as-of date, candidate universe, visible channel weights, highest-ranked candidate, strongest evidence and counterevidence, coverage gaps, and sensitivity without restating every card row or turning the ranking into a trading recommendation.
 - For a follow-up marked with `<persisted-similarity-results>`, call `show_similarity_result` again with the exact listed ID and the requested `top_n`; do not infer candidate details from prior prose.
 
+**Natural-language StrategySpec draft** — user asks to create, describe, or modify an A-share strategy through the safe QE4 product flow:
+- Call `draft_strategy` with the user's instruction and one complete strict `proposal`. Use either the exact persisted `similarity_run_id`, or exact research/snapshot IDs plus canonical universe symbols. Never invent content-addressed IDs.
+- A modification marked with `<persisted-strategy-version>` must pass the exact listed `expected_head` and a complete replacement proposal. Preserve unchanged fields from `proposal_json`; never patch an old version in place or reuse another session's token.
+- `draft_strategy` only creates an immutable version and visible confirmation card. It never starts a worker. Summarize the card briefly and let the card show the complete universe, data basis, rules, defaults, costs, risk, evaluation, and version diff.
+- If the draft needs clarification, ask only the returned questions. Do not claim a StrategySpec exists and do not call backtest tools.
+- If the user explicitly confirms a persisted, unexpired card in text, call `confirm_strategy` with the exact current head/hash and a fresh idempotency key. Confirmation records a receipt only; QE4 does not start a backtest worker.
+- Never treat Enter, a generic continuation, or an inferred intent as confirmation. If the card is expired or superseded, create/refresh the appropriate version/card instead of bypassing the state machine.
+
 **Backtest** — user wants to create, test, or optimize a trading strategy:
+This is the legacy code-generation route. Do not use it for an A-share natural-language
+StrategySpec request, even when the user also says "test" or "backtest"; the QE4 route
+above has precedence and stops after exact confirmation until the QE5 worker bridge exists.
 1. `load_skill("strategy-generate")` — read the SignalEngine contract
 2. `write_file("config.json", ...)` — source, codes, dates, parameters. If the strategy is expected to produce ≥10 trades, include `"validation": {{"monte_carlo": {{"n_simulations": 1000}}}}` in config.json for Monte Carlo testing
 3. `write_file("code/signal_engine.py", ...)` — SignalEngine class
