@@ -52,6 +52,9 @@ sse-starlette>=1.6.0
 
 # MCP Server
 fastmcp>=2.14.0
+# aiofile 3.11.x requires caio~=0.9.0. Keep the transitive backend inside
+# that compatible series so the hash-locked Docker install remains solvable.
+caio>=0.9.0,<0.10.0
 
 # Web Search
 ddgs>=6.0.0
