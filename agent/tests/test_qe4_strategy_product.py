@@ -343,7 +343,9 @@ def test_history_resolves_current_head_and_rejects_cross_session_metadata(
     assert f"revision={drafted['head']['revision']}" in restored
     assert "proposal_json=" in restored
     assert crossed == ""
-    assert "<persisted-strategy-version>" in history[0]["content"]
+    assert history[0] == {"role": "assistant", "content": "已生成确认卡。"}
+    assert history[1]["role"] == "system"
+    assert "<persisted-strategy-version>" in history[1]["content"]
 
 
 def test_authenticated_api_confirms_exact_card_idempotently_and_restores_state(

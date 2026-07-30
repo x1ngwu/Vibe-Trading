@@ -30,6 +30,11 @@ from src.agent.memory import WorkspaceMemory
 from src.agent.progress import HeartbeatTimer, ProgressEvent, _set_emitter
 from src.agent.tools import ToolRegistry
 from src.agent.trace import TraceWriter
+from src.agent.visible_output import (
+    SAFE_FILTERED_RESPONSE,
+    VisibleAssistantStreamFilter,
+    strip_internal_context_blocks,
+)
 from src.core.state import RunStateStore
 from src.goal.context import (
     format_goal_continuation_prompt,
@@ -566,6 +571,7 @@ class AgentLoop:
         self._previous_summary: str = ""
         self._persistent_memory = persistent_memory
         self._run_iteration: int = 0
+        self._typed_tool_errors: dict[str, dict[str, Any]] = {}
 
     def cancel(self) -> None:
         """Cancel the current loop.
@@ -591,6 +597,7 @@ class AgentLoop:
         self._cancel_event.clear()
         self._called_ok = set()
         self._previous_summary = ""
+        self._typed_tool_errors = {}
 
         state_store = RunStateStore()
         RUNS_DIR.mkdir(parents=True, exist_ok=True)
@@ -711,12 +718,19 @@ class AgentLoop:
 
                 # Streaming output + collect thinking text
                 thinking_chunks: List[str] = []
+                visible_stream_filter = VisibleAssistantStreamFilter()
                 reasoning_chars = 0
                 last_reasoning_emit: float | None = None
 
                 def _on_text_chunk(delta: str) -> None:
-                    thinking_chunks.append(delta)
-                    self._emit("text_delta", {"delta": delta, "iter": current_iter})
+                    safe_delta = visible_stream_filter.feed(delta)
+                    if not safe_delta:
+                        return
+                    thinking_chunks.append(safe_delta)
+                    self._emit(
+                        "text_delta",
+                        {"delta": safe_delta, "iter": current_iter},
+                    )
 
                 def _on_reasoning_chunk(delta: str) -> None:
                     # Throttled: long reasoning streams produce hundreds of
@@ -775,6 +789,7 @@ class AgentLoop:
                         },
                     )
                     thinking_chunks.clear()
+                    visible_stream_filter = VisibleAssistantStreamFilter()
                     reasoning_chars = 0
                     last_reasoning_emit = None
                     _time.sleep(_stream_retry_delay_s())
@@ -784,6 +799,14 @@ class AgentLoop:
                         on_text_chunk=_on_text_chunk,
                         on_reasoning_chunk=_on_reasoning_chunk,
                         should_cancel=self._cancel_event.is_set,
+                    )
+
+                trailing_text = visible_stream_filter.finish()
+                if trailing_text:
+                    thinking_chunks.append(trailing_text)
+                    self._emit(
+                        "text_delta",
+                        {"delta": trailing_text, "iter": current_iter},
                     )
 
                 # Cancelled mid-stream: discard this turn's partial response and
@@ -867,9 +890,24 @@ class AgentLoop:
 
                 # Not filtered — reset the consecutive-skip counter.
                 consecutive_content_filter_count = 0
+                raw_response_content = response.content or ""
+                visible_response_content = strip_internal_context_blocks(
+                    raw_response_content
+                )
 
                 if not response.has_tool_calls:
-                    final_content = response.content or ""
+                    final_content = visible_response_content
+                    if raw_response_content.strip() and not final_content:
+                        final_content = SAFE_FILTERED_RESPONSE
+                    draft_error = self._typed_tool_errors.get("draft_strategy")
+                    if draft_error is not None:
+                        user_message = str(draft_error.get("user_message") or "").strip()
+                        recovery = str(draft_error.get("recovery") or "").strip()
+                        final_content = user_message
+                        if recovery:
+                            final_content = f"{final_content}\n\n下一步：{recovery}"
+                        if draft_error.get("worker_started") is False:
+                            final_content = f"{final_content}\n\n未启动回测 worker。"
                     if not final_content:
                         empty_model_response_iter = iteration
                         trace.write(
@@ -968,7 +1006,7 @@ class AgentLoop:
 
                 assistant_message = context.format_assistant_tool_calls(
                     response.tool_calls,
-                    content=response.content,
+                    content=visible_response_content,
                     reasoning_content=response.reasoning_content or thinking_text or None,
                 )
                 _attach_tool_call_thought_signatures(assistant_message, response.tool_calls)
@@ -1472,6 +1510,18 @@ class AgentLoop:
         success = _is_tool_success(result)
         if success:
             self._called_ok.add(tc.name)
+            self._typed_tool_errors.pop(tc.name, None)
+        else:
+            try:
+                error_payload = json.loads(result)
+            except (json.JSONDecodeError, TypeError):
+                error_payload = None
+            if (
+                isinstance(error_payload, dict)
+                and isinstance(error_payload.get("error_code"), str)
+                and isinstance(error_payload.get("user_message"), str)
+            ):
+                self._typed_tool_errors[tc.name] = error_payload
 
         status = "ok" if success else "error"
         truncated = result[:TOOL_RESULT_LIMIT]

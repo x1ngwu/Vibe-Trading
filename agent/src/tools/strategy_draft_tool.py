@@ -39,6 +39,27 @@ _OBJECT_ID = re.compile(
 _CONFIRMATION_TTL_MINUTES = 15
 
 
+class StrategySourceError(ValueError):
+    """Stable, user-explainable failure at the strategy source boundary."""
+
+    def __init__(self, code: str, message: str, recovery: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.recovery = recovery
+
+    def as_tool_result(self) -> str:
+        return canonical_json(
+            {
+                "status": "error",
+                "error_code": self.code,
+                "error": str(self),
+                "user_message": str(self),
+                "recovery": self.recovery,
+                "worker_started": False,
+            }
+        )
+
+
 class _ProposalModel:
     """Return the already schema-bound Agent function arguments as model JSON."""
 
@@ -65,7 +86,12 @@ def _source_from_kwargs(store: ResearchStore, kwargs: dict[str, Any]) -> Strateg
             kwargs.get(key)
             for key in ("research_spec_id", "data_snapshot_id", "universe_symbols")
         ):
-            raise ValueError("strategy source cannot mix SimilarityRun and direct inputs")
+            raise StrategySourceError(
+                "strategy_source_conflict",
+                "策略来源冲突：SimilarityRun 不能与直接 research/snapshot/universe 输入同时使用。",
+                "若要基于相似股结果继续，只保留 exact similarity_run_id 后重试；"
+                "不要改写或猜测策略字段。",
+            )
         similarity = _require_object(store, similarity_run_id, "similarity_run")
         payload = SimilarityRun.model_validate(similarity.payload)
         research = _require_object(
@@ -84,9 +110,10 @@ def _source_from_kwargs(store: ResearchStore, kwargs: dict[str, Any]) -> Strateg
     snapshot_id = str(kwargs.get("data_snapshot_id") or "").strip()
     symbols = tuple(kwargs.get("universe_symbols") or ())
     if not research_id or not snapshot_id or not symbols:
-        raise ValueError(
-            "direct strategy source requires research_spec_id, data_snapshot_id, "
-            "and universe_symbols"
+        raise StrategySourceError(
+            "direct_strategy_source_incomplete",
+            "直接策略来源不完整：必须同时提供 research_spec_id、data_snapshot_id 和 universe_symbols。",
+            "补齐同一研究对象的三个直接来源字段，或改为只提供 exact similarity_run_id。",
         )
     research = _require_object(store, research_id, "research_spec")
     snapshot = _require_object(store, snapshot_id, "data_snapshot_ref")
@@ -172,7 +199,9 @@ class DraftStrategyTool(BaseTool):
     description = (
         "Compile a natural-language household A-share strategy into the strict QE4 "
         "StrategySpec path. The Agent supplies one schema-bound proposal plus either "
-        "an exact SimilarityRun ID or exact research/snapshot IDs and symbols. This "
+        "an exact SimilarityRun ID or exact research/snapshot IDs and symbols; these "
+        "source forms are mutually exclusive. On a typed source error, report its "
+        "exact user_message and recovery instead of inferring a different cause. This "
         "tool creates a draft/child version and confirmation card only; it never "
         "starts a backtest worker."
     )
@@ -208,6 +237,37 @@ class DraftStrategyTool(BaseTool):
             },
         },
         "required": ["instruction", "proposal"],
+        "oneOf": [
+            {
+                "required": ["similarity_run_id"],
+                "not": {
+                    "anyOf": [
+                        {"required": ["research_spec_id"]},
+                        {"required": ["data_snapshot_id"]},
+                        {"required": ["universe_symbols"]},
+                    ]
+                },
+            },
+            {
+                "required": [
+                    "research_spec_id",
+                    "data_snapshot_id",
+                    "universe_symbols",
+                ],
+                "not": {"required": ["similarity_run_id"]},
+            },
+            {
+                "required": ["expected_head"],
+                "not": {
+                    "anyOf": [
+                        {"required": ["similarity_run_id"]},
+                        {"required": ["research_spec_id"]},
+                        {"required": ["data_snapshot_id"]},
+                        {"required": ["universe_symbols"]},
+                    ]
+                },
+            },
+        ],
     }
     repeatable = True
     is_readonly = False
@@ -248,86 +308,101 @@ class DraftStrategyTool(BaseTool):
             if expected_raw is not None
             else None
         )
-        with StrategyVersionStore(db_path) as version_store:
-            current = version_store.get_head(self._session_id)
-            source = None
-            explicit_source = bool(
-                kwargs.get("similarity_run_id")
-                or kwargs.get("research_spec_id")
-                or kwargs.get("data_snapshot_id")
-                or kwargs.get("universe_symbols")
-            )
-            if current is not None:
-                if expected_head is None:
-                    raise ValueError(
-                        "strategy stream already exists; pass the exact current expected_head"
-                    )
-                if expected_head.stream_id != self._session_id:
-                    raise ValueError("expected_head belongs to another session")
-                if explicit_source:
-                    source = _source_from_kwargs(research_store, kwargs)
-                else:
+        try:
+            with StrategyVersionStore(db_path) as version_store:
+                current = version_store.get_head(self._session_id)
+                source = None
+                explicit_source = bool(
+                    kwargs.get("similarity_run_id")
+                    or kwargs.get("research_spec_id")
+                    or kwargs.get("data_snapshot_id")
+                    or kwargs.get("universe_symbols")
+                )
+                if current is not None:
+                    if expected_head is None:
+                        raise ValueError(
+                            "strategy stream already exists; pass the exact current expected_head"
+                        )
+                    if expected_head.stream_id != self._session_id:
+                        raise ValueError("expected_head belongs to another session")
                     current_version = version_store.get_version(current.version_id)
-                    if current_version is not None:
+                    if explicit_source:
+                        source = _source_from_kwargs(research_store, kwargs)
+                        if (
+                            current_version is not None
+                            and current_version.source_context is not None
+                            and _version_source(source)
+                            != current_version.source_context
+                        ):
+                            raise StrategySourceError(
+                                "strategy_source_change_forbidden",
+                                "策略修改不能切换数据来源；请保持当前版本绑定的研究对象和快照。",
+                                "仅传 exact expected_head 和完整 replacement proposal 后重试。",
+                            )
+                    elif current_version is not None:
                         source = _source_from_version(research_store, current_version)
-            elif expected_head is not None:
-                raise ValueError("cannot modify a strategy stream that does not exist")
-            if source is None:
-                source = _source_from_kwargs(research_store, kwargs)
+                elif expected_head is not None:
+                    raise ValueError("cannot modify a strategy stream that does not exist")
+                if source is None:
+                    source = _source_from_kwargs(research_store, kwargs)
 
-            result = draft_strategy_from_language(
-                _ProposalModel(proposal),
-                request,
-                source=source,
-            )
-            if result.status == "rejected":
-                return canonical_json(
-                    {
-                        "status": "rejected",
-                        "issues": [
-                            issue.model_dump(mode="json") for issue in result.issues
-                        ],
-                        "security_warnings": [
-                            item.model_dump(mode="json")
-                            for item in result.security_warnings
-                        ],
-                        "worker_started": False,
-                    }
+                result = draft_strategy_from_language(
+                    _ProposalModel(proposal),
+                    request,
+                    source=source,
                 )
-            if result.build is not None:
-                research_store.put(result.build.strategy_object)
-            if current is None:
-                version, head = version_store.create_initial_version(
-                    stream_id=self._session_id,
-                    owner_scope=DEFAULT_OWNER_SCOPE,
-                    result=result,
-                    source_context=_version_source(source),
-                )
-            else:
-                assert expected_head is not None
-                version, head = version_store.modify_version(
-                    stream_id=self._session_id,
-                    expected_head=expected_head,
-                    result=result,
-                    source_context=_version_source(source),
-                )
+                if result.status == "rejected":
+                    return canonical_json(
+                        {
+                            "status": "rejected",
+                            "issues": [
+                                issue.model_dump(mode="json") for issue in result.issues
+                            ],
+                            "security_warnings": [
+                                item.model_dump(mode="json")
+                                for item in result.security_warnings
+                            ],
+                            "worker_started": False,
+                        }
+                    )
+                if result.build is not None:
+                    research_store.put(result.build.strategy_object)
+                if current is None:
+                    version, head = version_store.create_initial_version(
+                        stream_id=self._session_id,
+                        owner_scope=DEFAULT_OWNER_SCOPE,
+                        result=result,
+                        source_context=_version_source(source),
+                    )
+                else:
+                    assert expected_head is not None
+                    version, head = version_store.modify_version(
+                        stream_id=self._session_id,
+                        expected_head=expected_head,
+                        result=result,
+                        source_context=_version_source(source),
+                    )
 
-            card = None
-            if result.status == "ready":
-                issued_at = datetime.now(timezone.utc)
-                card, head = version_store.prepare_confirmation(
-                    stream_id=self._session_id,
-                    expected_head=head,
-                    issued_at=issued_at,
-                    expires_at=issued_at + timedelta(minutes=_CONFIRMATION_TTL_MINUTES),
+                card = None
+                if result.status == "ready":
+                    issued_at = datetime.now(timezone.utc)
+                    card, head = version_store.prepare_confirmation(
+                        stream_id=self._session_id,
+                        expected_head=head,
+                        issued_at=issued_at,
+                        expires_at=issued_at + timedelta(
+                            minutes=_CONFIRMATION_TTL_MINUTES
+                        ),
+                    )
+                spec, payload = build_strategy_visualization(
+                    version=version,
+                    head=head,
+                    card=card,
+                    data_basis=_data_basis(source),
                 )
-            spec, payload = build_strategy_visualization(
-                version=version,
-                head=head,
-                card=card,
-                data_basis=_data_basis(source),
-            )
-            persist_strategy_visualization(run_dir, spec, payload)
+                persist_strategy_visualization(run_dir, spec, payload)
+        except StrategySourceError as exc:
+            return exc.as_tool_result()
 
         if self._event_callback is not None:
             self._event_callback(

@@ -151,7 +151,7 @@ function payload(
       security_warnings: [],
       diff: [],
       issued_at: "2026-07-29T12:00:00Z",
-      expires_at: "2026-07-29T12:15:00Z",
+      expires_at: "2099-07-29T12:15:00Z",
     },
     receipt: state === "confirmed" ? {
       receipt_id: `strategy-receipt:${"7".repeat(64)}`,

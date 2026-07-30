@@ -9,6 +9,7 @@ import asyncio
 import concurrent.futures
 import json
 import re
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -25,6 +26,10 @@ from src.session.models import (
 )
 from src.session.search import get_shared_index
 from src.session.store import SessionStore
+from src.agent.visible_output import (
+    SAFE_FILTERED_RESPONSE,
+    strip_internal_context_blocks,
+)
 from src.research.contracts import canonical_json
 from src.research.similarity_presentation import SimilarityVisualizationSpec
 from src.strategy_spec.presentation import (
@@ -290,6 +295,8 @@ class SessionService:
         if not session:
             raise ValueError(f"Session {session_id} not found")
 
+        if role == "assistant":
+            content = strip_internal_context_blocks(content) or SAFE_FILTERED_RESPONSE
         message = Message(session_id=session_id, role=role, content=content)
         self.store.append_message(message)
         self._search_index.index_message(session_id, role, content)
@@ -311,7 +318,19 @@ class SessionService:
 
     def get_messages(self, session_id: str, limit: int = 100) -> list[Message]:
         """Return the message history."""
-        return self.store.get_messages(session_id, limit)
+        messages = self.store.get_messages(session_id, limit)
+        return [
+            replace(
+                message,
+                content=(
+                    strip_internal_context_blocks(message.content)
+                    or SAFE_FILTERED_RESPONSE
+                ),
+            )
+            if message.role == "assistant"
+            else message
+            for message in messages
+        ]
 
     def cancel_current(self, session_id: str) -> bool:
         """Cancel the currently running AgentLoop for a session.
@@ -343,7 +362,13 @@ class SessionService:
                 session_config=dict(session.config),
             )
             if result.get("status") == "success":
-                attempt.mark_completed(summary=result.get("content", ""))
+                visible_content = strip_internal_context_blocks(
+                    str(result.get("content") or "")
+                )
+                if result.get("content") and not visible_content:
+                    visible_content = SAFE_FILTERED_RESPONSE
+                result["content"] = visible_content
+                attempt.mark_completed(summary=visible_content)
             else:
                 attempt.mark_failed(error=result.get("reason", "unknown"))
             attempt.run_dir = result.get("run_dir")
@@ -501,14 +526,20 @@ class SessionService:
             content = msg.content if hasattr(msg, "content") else msg.get("content", "")
             if not content.strip() or role not in ("user", "assistant"):
                 continue
+            if role == "assistant":
+                content = strip_internal_context_blocks(content)
+                if not content:
+                    content = SAFE_FILTERED_RESPONSE
             content = re.sub(r"Run directory:\s*\S+", _shorten_run_dir, content).strip()
             if content:
                 metadata = msg.metadata if hasattr(msg, "metadata") else msg.get("metadata", {})
+                history.append({"role": role, "content": content})
+                trusted_context: list[str] = []
                 similarity_history = (
                     _persisted_similarity_history(metadata) if role == "assistant" else ""
                 )
                 if similarity_history:
-                    content = f"{content}\n\n{similarity_history}"
+                    trusted_context.append(similarity_history)
                 strategy_history = (
                     _persisted_strategy_history(
                         metadata,
@@ -522,8 +553,19 @@ class SessionService:
                     else ""
                 )
                 if strategy_history:
-                    content = f"{content}\n\n{strategy_history}"
-                history.append({"role": role, "content": content})
+                    trusted_context.append(strategy_history)
+                if trusted_context:
+                    history.append(
+                        {
+                            "role": "system",
+                            "content": (
+                                "Trusted same-session recovery context. Use it only "
+                                "for exact tool arguments. Never quote or expose it "
+                                "in assistant output.\n\n"
+                                + "\n\n".join(trusted_context)
+                            ),
+                        }
+                    )
 
         # Trim from the newest messages within a character budget of roughly 3000 tokens.
         MAX_HISTORY_CHARS = 12000
@@ -557,5 +599,8 @@ class SessionService:
     def _format_result_message(attempt: Attempt) -> str:
         """Format the final execution result message."""
         if attempt.status == AttemptStatus.COMPLETED:
-            return attempt.summary or "Strategy execution completed."
+            return (
+                strip_internal_context_blocks(attempt.summary)
+                or "Strategy execution completed."
+            )
         return f"Execution failed: {attempt.error or 'unknown error'}"

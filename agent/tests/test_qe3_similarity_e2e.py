@@ -187,11 +187,13 @@ def test_two_samples_to_ten_candidates_survives_sse_and_history(
             ),
         ]
     )
-    assert len(follow_up_history) == 1
-    assert similarity.object_id in follow_up_history[0]["content"]
-    assert "<persisted-similarity-results>" in follow_up_history[0]["content"]
-    assert "visible_candidate_count=10" in follow_up_history[0]["content"]
-    assert "Reuse an exact ID with show_similarity_result" in follow_up_history[0]["content"]
+    assert len(follow_up_history) == 2
+    assert similarity.object_id in follow_up_history[1]["content"]
+    assert "<persisted-similarity-results>" not in follow_up_history[0]["content"]
+    assert follow_up_history[1]["role"] == "system"
+    assert "<persisted-similarity-results>" in follow_up_history[1]["content"]
+    assert "visible_candidate_count=10" in follow_up_history[1]["content"]
+    assert "Reuse an exact ID with show_similarity_result" in follow_up_history[1]["content"]
 
     payload = json.loads(
         (run_dir / "artifacts" / "visualizations" / f"{expected_spec['visualization_id']}.json")
