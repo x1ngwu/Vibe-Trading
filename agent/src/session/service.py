@@ -86,13 +86,25 @@ def load_visualization_specs(run_dir: Path) -> list[Dict[str, Any]]:
             continue
         if item.get("type") == "strategy_confirmation":
             try:
-                specs.append(
-                    StrategyConfirmationVisualizationSpec.model_validate(
-                        item
-                    ).model_dump(mode="json")
+                strategy_spec = (
+                    StrategyConfirmationVisualizationSpec.model_validate(item)
                 )
             except ValueError:
                 pass
+            else:
+                # One agent attempt can legitimately refine a clarification
+                # draft into a ready confirmation card.  The manifest keeps
+                # both immutable versions for audit, but chat should present
+                # only the newest head for that strategy stream.
+                specs = [
+                    spec
+                    for spec in specs
+                    if not (
+                        spec.get("type") == "strategy_confirmation"
+                        and spec.get("stream_id") == strategy_spec.stream_id
+                    )
+                ]
+                specs.append(strategy_spec.model_dump(mode="json"))
             continue
         visualization_id = item.get("visualization_id")
         data_ref = item.get("data_ref")

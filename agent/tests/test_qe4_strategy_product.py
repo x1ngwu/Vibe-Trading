@@ -187,6 +187,48 @@ def test_direct_and_similarity_sources_share_card_contract(
     assert direct_payload.card.strategy.data_snapshot_ref == snapshot.ref()
 
 
+def test_chat_visualizations_keep_only_latest_strategy_head_per_stream(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "runs" / "refined-draft"
+    manifest = run_dir / "artifacts" / "visualizations.json"
+    manifest.parent.mkdir(parents=True)
+    initial = {
+        "schema_version": 1,
+        "type": "strategy_confirmation",
+        "visualization_id": "strategy_initial_clarification",
+        "data_ref": "strategy_initial_clarification",
+        "title": "策略需要补充信息",
+        "stream_id": "session-refined",
+        "version_id": f"strategy-version:{'1' * 64}",
+        "version_number": 1,
+        "parent_version_id": None,
+        "head_event_id": f"strategy-state:{'2' * 64}",
+        "head_revision": 1,
+        "confirmation_hash": None,
+        "fallback_text": "策略草案需要补充信息。",
+    }
+    latest = {
+        **initial,
+        "visualization_id": "strategy_latest_ready",
+        "data_ref": "strategy_latest_ready",
+        "title": "低波动月度策略",
+        "version_id": f"strategy-version:{'3' * 64}",
+        "version_number": 2,
+        "parent_version_id": initial["version_id"],
+        "head_event_id": f"strategy-state:{'4' * 64}",
+        "head_revision": 3,
+        "confirmation_hash": "5" * 64,
+        "fallback_text": "策略确认卡已生成。",
+    }
+    manifest.write_text(
+        json.dumps([initial, latest], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    assert load_visualization_specs(run_dir) == [latest]
+
+
 def test_text_confirmation_records_receipt_without_worker(
     monkeypatch,
     tmp_path: Path,
