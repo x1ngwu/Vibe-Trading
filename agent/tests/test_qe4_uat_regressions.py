@@ -196,6 +196,70 @@ class _TypedDraftErrorTool:
         )
 
 
+class _SuccessfulSimilarityTool:
+    name = "show_similarity_result"
+    description = "Attach a trusted persisted similarity result."
+    parameters = {"type": "object", "properties": {}}
+    repeatable = True
+    is_readonly = True
+    requires_current_run_dir = False
+
+    @classmethod
+    def check_available(cls) -> bool:
+        return True
+
+    def to_openai_schema(self) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters,
+            },
+        }
+
+    def execute(self, **kwargs: Any) -> str:
+        del kwargs
+        return json.dumps({"status": "ok", "similarity_run_id": _SIMILARITY_ID})
+
+
+class _SuccessfulDraftTool:
+    name = "draft_strategy"
+    description = "Persist a QE4 strategy confirmation card."
+    parameters = {"type": "object", "properties": {}}
+    repeatable = True
+    is_readonly = False
+    requires_current_run_dir = False
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @classmethod
+    def check_available(cls) -> bool:
+        return True
+
+    def to_openai_schema(self) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters,
+            },
+        }
+
+    def execute(self, **kwargs: Any) -> str:
+        del kwargs
+        self.calls += 1
+        return json.dumps(
+            {
+                "status": "ready",
+                "version_id": "strategy-version:" + "d" * 64,
+                "worker_started": False,
+            }
+        )
+
+
 class _ScriptedTypedErrorLLM:
     def __init__(self) -> None:
         self.calls = 0
@@ -228,6 +292,63 @@ class _ScriptedTypedErrorLLM:
         return _LeakyResponse("")
 
 
+class _MissingDraftThenRecoveryLLM:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.saw_effect_check = False
+
+    def stream_chat(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[Any] | None = None,
+        on_text_chunk: Callable[[str], None] | None = None,
+        on_reasoning_chunk: Callable[[str], None] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> _LeakyResponse:
+        del tools, on_reasoning_chunk, should_cancel
+        self.calls += 1
+        if self.calls == 1:
+            response = _LeakyResponse("")
+            response.tool_calls = [
+                SimpleNamespace(
+                    id="show-similarity-1",
+                    name="show_similarity_result",
+                    arguments={},
+                )
+            ]
+            response.has_tool_calls = True
+            return response
+        if self.calls == 2:
+            content = "已生成 Top 3 策略确认卡，但本轮实际没有调用建卡工具。"
+            if on_text_chunk is not None:
+                on_text_chunk(content)
+            return _LeakyResponse(content)
+        if self.calls == 3:
+            self.saw_effect_check = any(
+                message.get("role") == "system"
+                and "SERVER EFFECT CHECK" in str(message.get("content") or "")
+                for message in messages
+            )
+            response = _LeakyResponse("")
+            response.tool_calls = [
+                SimpleNamespace(
+                    id="draft-strategy-1",
+                    name="draft_strategy",
+                    arguments={},
+                )
+            ]
+            response.has_tool_calls = True
+            return response
+        content = "正式 Top 3 策略确认卡已生成，未启动回测 worker。"
+        if on_text_chunk is not None:
+            on_text_chunk(content)
+        return _LeakyResponse(content)
+
+    def chat(self, messages: list[dict[str, Any]], **_: Any) -> _LeakyResponse:
+        del messages
+        return _LeakyResponse("")
+
+
 def test_qe4_uat_01_typed_source_error_overrides_model_misattribution(
     tmp_path: Path,
 ) -> None:
@@ -251,6 +372,109 @@ def test_qe4_uat_01_typed_source_error_overrides_model_misattribution(
         "未启动回测 worker。"
     )
     assert "白名单" not in result["content"]
+
+
+def test_qe4_uat_03_missing_draft_effect_resets_stream_and_forces_one_retry(
+    tmp_path: Path,
+) -> None:
+    registry = ToolRegistry()
+    registry.register(_SuccessfulSimilarityTool())
+    draft_tool = _SuccessfulDraftTool()
+    registry.register(draft_tool)
+    events: list[tuple[str, dict[str, Any]]] = []
+    llm = _MissingDraftThenRecoveryLLM()
+    agent = AgentLoop(
+        registry=registry,
+        llm=llm,
+        event_callback=lambda kind, payload: events.append((kind, payload)),
+        max_iterations=4,
+        persistent_memory=PersistentMemory(memory_dir=tmp_path / "memory"),
+    )
+    agent.memory.run_dir = str(tmp_path / "run")
+    history = [
+        {
+            "role": "system",
+            "content": (
+                "Trusted same-session recovery context.\n"
+                "<persisted-similarity-results>\n"
+                f"similarity_run_id={_SIMILARITY_ID}\n"
+                "</persisted-similarity-results>"
+            ),
+        }
+    ]
+
+    result = agent.run(
+        "基于刚才的相似股结果设计低风险策略，生成 Top 3 确认卡，不要回测。",
+        history=history,
+    )
+
+    assert result["status"] == "success"
+    assert result["content"] == "正式 Top 3 策略确认卡已生成，未启动回测 worker。"
+    assert draft_tool.calls == 1
+    assert llm.saw_effect_check is True
+    reset_index = next(
+        index
+        for index, (kind, payload) in enumerate(events)
+        if kind == "stream_reset"
+        and payload.get("reason") == "required_tool_effect_missing"
+    )
+    assert any(
+        kind == "text_delta"
+        and "本轮实际没有调用建卡工具" in payload.get("delta", "")
+        for kind, payload in events[:reset_index]
+    )
+    assert "".join(
+        payload["delta"]
+        for kind, payload in events[reset_index + 1 :]
+        if kind == "text_delta"
+    ) == result["content"]
+
+
+def test_qe4_uat_03_missing_draft_effect_fails_closed_when_retry_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    registry = ToolRegistry()
+    draft_tool = _SuccessfulDraftTool()
+    registry.register(draft_tool)
+    events: list[tuple[str, dict[str, Any]]] = []
+    agent = AgentLoop(
+        registry=registry,
+        llm=_LeakyStreamingLLM(("已生成确认卡。",)),
+        event_callback=lambda kind, payload: events.append((kind, payload)),
+        max_iterations=1,
+        persistent_memory=PersistentMemory(memory_dir=tmp_path / "memory"),
+    )
+    agent.memory.run_dir = str(tmp_path / "run")
+
+    result = agent.run(
+        "把当前策略改成只持有2只。",
+        history=[
+            {
+                "role": "system",
+                "content": (
+                    "<persisted-strategy-version>\n"
+                    "version_id=strategy-version:trusted\n"
+                    "</persisted-strategy-version>"
+                ),
+            }
+        ],
+    )
+
+    assert result["status"] == "success"
+    assert result["content"] == (
+        "未生成策略确认卡：本轮没有成功执行 draft_strategy，系统已阻止将文字摘要"
+        "误报为正式确认卡。\n\n未启动回测 worker。请重试原请求。"
+    )
+    assert draft_tool.calls == 0
+    assert [kind for kind, _payload in events].count("stream_reset") == 1
+    reset_index = next(
+        index for index, (kind, _payload) in enumerate(events) if kind == "stream_reset"
+    )
+    assert "".join(
+        payload["delta"]
+        for kind, payload in events[reset_index + 1 :]
+        if kind == "text_delta"
+    ) == result["content"]
 
 
 def test_qe4_uat_02_agent_loop_filters_live_sse_and_final_content(

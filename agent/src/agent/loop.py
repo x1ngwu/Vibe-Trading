@@ -64,6 +64,42 @@ COLLAPSE_HEAD = 900
 COLLAPSE_TAIL = 500
 
 TAIL_TOKEN_BUDGET = 20_000
+STRATEGY_DRAFT_EFFECT_MAX_RETRIES = 1
+
+_STRATEGY_CONTEXT_MARKER = "<persisted-strategy-version>"
+_SIMILARITY_CONTEXT_MARKER = "<persisted-similarity-results>"
+_STRATEGY_DRAFT_ACTION_TERMS = (
+    "生成",
+    "创建",
+    "设计",
+    "草拟",
+    "起草",
+    "改成",
+    "修改",
+    "调整",
+    "变更",
+    "draft",
+    "create",
+    "design",
+    "modify",
+    "change",
+    "update",
+)
+_STRATEGY_DRAFT_OBJECT_TERMS = (
+    "确认卡",
+    "策略",
+    "strategyspec",
+    "strategy",
+    "confirmation card",
+)
+_STRATEGY_DRAFT_NEGATIONS = (
+    "不要生成确认卡",
+    "不生成确认卡",
+    "无需生成确认卡",
+    "不要创建确认卡",
+    "don't create a confirmation card",
+    "do not create a confirmation card",
+)
 
 
 def _override(name: str):
@@ -491,6 +527,62 @@ def _is_tool_success(result: str) -> bool:
     return True
 
 
+def _strategy_draft_effect_required(
+    user_message: str,
+    messages: list[dict[str, Any]],
+    registry: ToolRegistry,
+) -> bool:
+    """Return whether this turn must create/modify a QE4 draft before claiming success.
+
+    This is intentionally a narrow product invariant rather than a general
+    natural-language router. It only activates when the server has already
+    injected trusted, same-session QE3/QE4 recovery context and the
+    ``draft_strategy`` tool is registered. That keeps ordinary strategy
+    discussion untouched while preventing a model from describing a
+    confirmation card that was never persisted.
+    """
+    try:
+        if registry.get("draft_strategy") is None:
+            return False
+    except Exception:  # noqa: BLE001 - an unknown registry cannot require the effect
+        return False
+
+    trusted_context = "\n".join(
+        str(message.get("content") or "")
+        for message in messages
+        if message.get("role") == "system"
+    )
+    has_strategy_context = _STRATEGY_CONTEXT_MARKER in trusted_context
+    has_similarity_context = _SIMILARITY_CONTEXT_MARKER in trusted_context
+    if not (has_strategy_context or has_similarity_context):
+        return False
+
+    normalized = " ".join(user_message.lower().split())
+    if any(term in normalized for term in _STRATEGY_DRAFT_NEGATIONS):
+        return False
+    has_action = any(term in normalized for term in _STRATEGY_DRAFT_ACTION_TERMS)
+    if not has_action:
+        return False
+    if has_strategy_context:
+        return True
+    return any(term in normalized for term in _STRATEGY_DRAFT_OBJECT_TERMS)
+
+
+def _missing_strategy_draft_message(user_message: str) -> str:
+    """Build the deterministic fail-closed response for an unmet draft effect."""
+    if any("\u4e00" <= char <= "\u9fff" for char in user_message):
+        return (
+            "未生成策略确认卡：本轮没有成功执行 draft_strategy，系统已阻止将文字摘要"
+            "误报为正式确认卡。\n\n未启动回测 worker。请重试原请求。"
+        )
+    return (
+        "No strategy confirmation card was created: draft_strategy did not "
+        "complete successfully, so the system blocked a prose summary from being "
+        "reported as a persisted card.\n\nNo backtest worker was started. Please "
+        "retry the original request."
+    )
+
+
 def _normalize_tool_run_dir(
     args: dict[str, Any],
     memory_run_dir: str | None,
@@ -622,6 +714,12 @@ class AgentLoop:
         goal_store = None
         goal_turn_accounted = False
         messages = context.build_messages(llm_user_message, history)
+        strategy_draft_effect_required = _strategy_draft_effect_required(
+            user_message,
+            messages,
+            self.registry,
+        )
+        strategy_draft_effect_retries = 0
         react_trace: List[Dict[str, Any]] = []
 
         trace_dir = SESSIONS_DIR / session_id if session_id else run_dir
@@ -896,10 +994,67 @@ class AgentLoop:
                 )
 
                 if not response.has_tool_calls:
-                    final_content = visible_response_content
-                    if raw_response_content.strip() and not final_content:
-                        final_content = SAFE_FILTERED_RESPONSE
                     draft_error = self._typed_tool_errors.get("draft_strategy")
+                    missing_draft_effect = (
+                        strategy_draft_effect_required
+                        and "draft_strategy" not in self._called_ok
+                        and draft_error is None
+                    )
+                    if missing_draft_effect:
+                        self._emit(
+                            "stream_reset",
+                            {
+                                "iter": current_iter,
+                                "reason": "required_tool_effect_missing",
+                                "tool": "draft_strategy",
+                            },
+                        )
+                        if (
+                            strategy_draft_effect_retries
+                            < STRATEGY_DRAFT_EFFECT_MAX_RETRIES
+                            and iteration < self.max_iterations
+                        ):
+                            strategy_draft_effect_retries += 1
+                            trace.write(
+                                {
+                                    "type": "required_tool_effect_retry",
+                                    "iter": current_iter,
+                                    "tool": "draft_strategy",
+                                    "retry": strategy_draft_effect_retries,
+                                }
+                            )
+                            messages.append(
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        "SERVER EFFECT CHECK: The user requested a QE4 "
+                                        "strategy draft/confirmation card using trusted "
+                                        "same-session context, but no successful "
+                                        "draft_strategy call exists for this turn. Do not "
+                                        "claim that a card exists. Call draft_strategy now "
+                                        "with the exact trusted source and a complete "
+                                        "proposal; if validation fails, surface the tool's "
+                                        "typed error."
+                                    ),
+                                }
+                            )
+                            continue
+                        final_content = _missing_strategy_draft_message(user_message)
+                        self._emit(
+                            "text_delta",
+                            {"delta": final_content, "iter": current_iter},
+                        )
+                        trace.write(
+                            {
+                                "type": "required_tool_effect_failed",
+                                "iter": current_iter,
+                                "tool": "draft_strategy",
+                            }
+                        )
+                    else:
+                        final_content = visible_response_content
+                        if raw_response_content.strip() and not final_content:
+                            final_content = SAFE_FILTERED_RESPONSE
                     if draft_error is not None:
                         user_message = str(draft_error.get("user_message") or "").strip()
                         recovery = str(draft_error.get("recovery") or "").strip()
