@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 
 from worker_runtime import WorkerError, run_worker  # noqa: E402
 from formal_operations import build_formal_handlers  # noqa: E402
+from formal_backtest import build_backtest_handler  # noqa: E402
 
 
 ENGINE_NAME = "quantaxis"
@@ -255,8 +256,8 @@ def capabilities(payload: Mapping[str, Any], snapshot: Mapping[str, Any] | None)
                 "status": "qe2",
                 "whitelist": ["ma", "ema"],
             },
-            "backtest": "not_available_until_qe5",
-            "normalize_ledger": "not_available_until_qe5",
+            "backtest": "qe5",
+            "normalize_ledger": "not_available_until_qe5_3",
         },
         "protocol": {"name": "vibe.quant-engine.jsonl", "schema_version": "1.0"},
     }
@@ -355,6 +356,7 @@ if __name__ == "__main__":
                 "capabilities": capabilities,
                 "direct_smoke": direct_smoke,
                 **build_formal_handlers(_load_quantaxis_base_boundary),
+                "backtest": build_backtest_handler(_load_quantaxis_boundary),
             },
         )
     )

@@ -1,8 +1,7 @@
-"""Engine-neutral subprocess protocol used by the QE0 isolation PoC.
+"""Engine-neutral protocol, isolated adapters, and deterministic accounting.
 
-The package is deliberately not registered with the API or deployment paths in
-QE0.  It only exposes the protocol and the local subprocess runner to tests and
-PoC tooling.
+These primitives remain deliberately separate from Agent/API and deployment
+registration. Product execution is introduced only by the later QE5 slices.
 """
 
 from .protocol import (
@@ -29,9 +28,19 @@ from .cn_equity_accounting import (
 )
 from .quantaxis_adapter import (
     QUANTAXIS_ENGINE_COMMIT,
+    QUANTAXIS_ENGINE_VERSION,
+    QUANTAXIS_SOURCE_SHA256,
     QuantaxisAdapter,
+    QuantaxisBacktestEvent,
+    QuantaxisBacktestResult,
+    QuantaxisBacktestWorkerResult,
     QuantaxisFactorSpec,
     QuantaxisOperationError,
+    QuantaxisPositionSnapshot,
+    QuantaxisReconciliationError,
+    QuantaxisRiskAudit,
+    QuantaxisRiskPolicy,
+    write_quantaxis_backtest_snapshot,
 )
 from .runner import RunResult, WorkerConfig, WorkerExecutionError, WorkerRunner, compute_snapshot_sha256
 
@@ -49,9 +58,18 @@ __all__ = [
     "EngineIdentity",
     "ProtocolError",
     "QUANTAXIS_ENGINE_COMMIT",
+    "QUANTAXIS_ENGINE_VERSION",
+    "QUANTAXIS_SOURCE_SHA256",
     "QuantaxisAdapter",
+    "QuantaxisBacktestEvent",
+    "QuantaxisBacktestResult",
+    "QuantaxisBacktestWorkerResult",
     "QuantaxisFactorSpec",
     "QuantaxisOperationError",
+    "QuantaxisPositionSnapshot",
+    "QuantaxisReconciliationError",
+    "QuantaxisRiskAudit",
+    "QuantaxisRiskPolicy",
     "RunResult",
     "WorkerConfig",
     "WorkerExecutionError",
@@ -63,4 +81,5 @@ __all__ = [
     "strict_json_loads",
     "validate_request",
     "validate_response",
+    "write_quantaxis_backtest_snapshot",
 ]
