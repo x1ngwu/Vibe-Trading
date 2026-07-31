@@ -35,7 +35,7 @@ from src.research.contracts import (
     canonical_sha256,
     create_research_object,
 )
-from src.research.store import ResearchStore
+from src.research.store import QuotaExceededError, ResearchStore, StoreIntegrityError
 from src.strategy_spec.compiler import StrategyCompilation
 from src.strategy_spec.versioning import (
     StrategyConfirmationCard,
@@ -74,6 +74,10 @@ class BacktestRunIntegrityError(BacktestRunError):
 
 class BacktestRunIdempotencyConflict(BacktestRunError):
     """One idempotency key was reused for another semantic run."""
+
+
+class BacktestRunQuotaExceeded(BacktestRunError):
+    """A staged or committed run would exceed the governed artifact quota."""
 
 
 class _StrictModel(BaseModel):
@@ -475,6 +479,32 @@ class PersistedBacktestRun:
     created: bool
 
 
+class _BacktestTransaction(_StrictModel):
+    transaction_id: str = Field(pattern=r"^backtest-txn:[0-9a-f]{64}$")
+    owner_scope: str = Field(pattern=r"^[a-z][a-z0-9._:-]{0,127}$")
+    idempotency_key: str = Field(pattern=_IDEMPOTENCY_PATTERN)
+    request_sha256: str = Field(pattern=_SHA256_PATTERN)
+    record_sha256: str = Field(pattern=_SHA256_PATTERN)
+    staged_record_name: str = Field(
+        pattern=r"^backtest-txn-[0-9a-f]{64}\.record\.json$"
+    )
+    summary: ResearchObject
+
+    @model_validator(mode="after")
+    def validate_transaction(self) -> "_BacktestTransaction":
+        if self.summary.object_type != "backtest_run":
+            raise ValueError("transaction summary must contain BacktestRun")
+        return self
+
+
+@dataclass(frozen=True)
+class BacktestBackupResult:
+    destination: Path
+    run_count: int
+    research_object_count: int
+    manifest_sha256: str
+
+
 def _diagnostic(
     *,
     sequence: int,
@@ -842,17 +872,23 @@ class BacktestRunStore:
         *,
         research_store: ResearchStore,
         max_record_bytes: int = 67_108_864,
+        total_quota_bytes: int = 1_073_741_824,
     ) -> None:
-        if max_record_bytes <= 0:
-            raise ValueError("max_record_bytes must be positive")
+        if max_record_bytes <= 0 or total_quota_bytes <= 0:
+            raise ValueError("BacktestRun store quotas must be positive")
+        if max_record_bytes > total_quota_bytes:
+            raise ValueError("max_record_bytes cannot exceed total_quota_bytes")
         self.root = Path(root)
         self.research_store = research_store
         self.max_record_bytes = max_record_bytes
+        self.total_quota_bytes = total_quota_bytes
         self.records_dir = self.root / "records"
+        self.transactions_dir = self.root / "transactions"
         self.database_path = self.root / "backtest-runs.db"
         self.lock_path = self.root / ".backtest-runs.lock"
         self._prepare()
         self._initialize_database()
+        self.pending_recovery_count = self.recover_pending()
 
     def put(
         self,
@@ -869,7 +905,6 @@ class BacktestRunStore:
         payload = (canonical_json(record) + "\n").encode("utf-8")
         if len(payload) > self.max_record_bytes:
             raise BacktestRunError("normalized BacktestRun exceeds max_record_bytes")
-        target = self._record_path(record.content_sha256)
 
         with self._exclusive_lock():
             existing_idempotency = self._idempotency_row(
@@ -898,84 +933,429 @@ class BacktestRunStore:
                     object=existing.object,
                     created=False,
                 )
+            transaction = self._ensure_transaction_locked(
+                prepared,
+                idempotency_key=idempotency_key,
+                record_payload=payload,
+            )
+            return self._commit_transaction_locked(transaction)
 
-            record_created = False
-            if target.exists() or target.is_symlink():
-                loaded = self._load_record(target)
-                if loaded != record:
-                    raise BacktestRunIntegrityError(
-                        "existing run path contains different content"
-                    )
-            else:
-                self._atomic_write(target, payload)
-                if self._load_record(target) != record:
-                    raise BacktestRunIntegrityError(
-                        "new run path contains different content"
-                    )
-                record_created = True
+    def recover_pending(self) -> int:
+        """Finish every durable transaction whose parent chain is now available."""
 
-            object_result = self.research_store.put(prepared.object)
+        recovered = 0
+        with self._exclusive_lock():
+            for path in self._transaction_manifest_paths():
+                transaction = self._load_transaction(path)
+                try:
+                    self._commit_transaction_locked(transaction)
+                except StoreIntegrityError as exc:
+                    if "parent object is not stored" in str(exc):
+                        continue
+                    raise
+                except QuotaExceededError:
+                    continue
+                recovered += 1
+            self._clean_orphan_staging_locked()
+        return recovered
+
+    def quota_usage_bytes(self) -> int:
+        """Return unique inode bytes charged to immutable records and staging."""
+
+        with self._exclusive_lock():
+            return self._artifact_bytes_on_disk()
+
+    def prune_unreferenced(
+        self,
+        *,
+        owner_scope: str,
+        keep_last: int,
+        created_before: datetime,
+        pinned_run_ids: tuple[str, ...] = (),
+    ) -> tuple[str, ...]:
+        """Delete old unreferenced runs while preserving newest and pinned history."""
+
+        if keep_last < 0:
+            raise ValueError("keep_last must be non-negative")
+        if created_before.tzinfo is None or created_before.utcoffset() is None:
+            raise ValueError("created_before must be timezone-aware")
+        pinned = set(pinned_run_ids)
+        for run_id in pinned:
+            self._parse_run_id(run_id)
+        removed: list[str] = []
+        with self._exclusive_lock():
             with self._connect() as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                connection.execute(
+                rows = connection.execute(
                     """
-                    INSERT INTO runs(
-                        run_id, owner_scope, strategy_stream_id,
-                        strategy_version_id, parent_strategy_version_id,
-                        request_sha256, record_sha256, backtest_object_id,
-                        relative_path, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(run_id) DO NOTHING
+                    SELECT run_id, owner_scope, backtest_object_id, created_at
+                    FROM runs WHERE owner_scope=?
+                    ORDER BY created_at DESC, run_id ASC
                     """,
-                    (
-                        record.run_id,
-                        record.owner_scope,
-                        record.provenance.strategy_stream_id,
-                        record.provenance.strategy_version_id,
-                        record.provenance.parent_strategy_version_id,
-                        record.provenance.backtest_input_sha256,
-                        record.content_sha256,
-                        prepared.object.object_id,
-                        target.relative_to(self.root).as_posix(),
-                        prepared.object.created_at.isoformat(),
-                    ),
+                    (owner_scope,),
+                ).fetchall()
+            retained = {row["run_id"] for row in rows[:keep_last]} | pinned
+            for row in rows[keep_last:]:
+                if row["run_id"] in retained:
+                    continue
+                created_at = datetime.fromisoformat(row["created_at"])
+                if created_at >= created_before:
+                    continue
+                digest = self._parse_run_id(row["run_id"])
+                target = self._record_path(digest)
+                record = self._load_record(target)
+                summary = self.research_store.get(
+                    row["backtest_object_id"],
+                    owner_scope=owner_scope,
                 )
-                existing_run = connection.execute(
-                    """
-                    SELECT owner_scope, request_sha256, record_sha256,
-                           backtest_object_id
-                    FROM runs WHERE run_id=?
-                    """,
-                    (record.run_id,),
-                ).fetchone()
-                if existing_run is None or tuple(existing_run) != (
+                if summary is None:
+                    raise BacktestRunIntegrityError(
+                        "retention candidate has no matching BacktestRun summary"
+                    )
+                tombstone = target.with_name(f".{target.name}.delete")
+                if tombstone.exists() or tombstone.is_symlink():
+                    raise BacktestRunIntegrityError(
+                        "BacktestRun deletion tombstone already exists"
+                    )
+                os.replace(target, tombstone)
+                self._fsync_directory(self.records_dir)
+                summary_deleted = False
+                try:
+                    summary_deleted = self.research_store.delete_leaf(
+                        summary.object_id,
+                        owner_scope=owner_scope,
+                    )
+                    if not summary_deleted:
+                        os.replace(tombstone, target)
+                        self._fsync_directory(self.records_dir)
+                        continue
+                    with self._connect() as connection:
+                        connection.execute("BEGIN IMMEDIATE")
+                        connection.execute(
+                            "DELETE FROM idempotency_keys WHERE run_id=?",
+                            (record.run_id,),
+                        )
+                        changed = connection.execute(
+                            "DELETE FROM runs WHERE run_id=? AND owner_scope=?",
+                            (record.run_id, owner_scope),
+                        ).rowcount
+                        if changed != 1:
+                            raise BacktestRunIntegrityError(
+                                "retention candidate disappeared from run index"
+                            )
+                        connection.commit()
+                    tombstone.unlink()
+                    self._fsync_directory(self.records_dir)
+                    removed.append(record.run_id)
+                except Exception:
+                    if tombstone.exists() and not target.exists():
+                        os.replace(tombstone, target)
+                        self._fsync_directory(self.records_dir)
+                    if summary_deleted:
+                        self.research_store.put(summary)
+                    raise
+        return tuple(removed)
+
+    def backup_to(self, destination: Path) -> BacktestBackupResult:
+        """Create and validate one isolated ResearchStore + BacktestRunStore backup."""
+
+        destination = Path(destination)
+        self._validate_backup_destination(destination)
+        research_destination = destination / "research"
+        backtest_destination = destination / "backtests"
+
+        with self._exclusive_lock():
+            pending = self._transaction_manifest_paths()
+            if pending:
+                raise BacktestRunIntegrityError(
+                    "cannot back up BacktestRun store with pending transactions"
+                )
+            destination.mkdir(parents=True, mode=0o700, exist_ok=True)
+            os.chmod(destination, 0o700)
+            backtest_destination.mkdir(mode=0o700)
+            (backtest_destination / "records").mkdir(mode=0o700)
+            (backtest_destination / "transactions").mkdir(mode=0o700)
+            research_count = self.research_store.backup_to(research_destination)
+            run_count = 0
+            for source in self._record_paths():
+                record = self._load_record(source)
+                target = backtest_destination / "records" / source.name
+                self._atomic_write(
+                    target,
+                    (canonical_json(record) + "\n").encode("utf-8"),
+                )
+                run_count += 1
+            backup_database = backtest_destination / self.database_path.name
+            with self._connect() as source_connection:
+                with sqlite3.connect(backup_database) as backup_connection:
+                    source_connection.backup(backup_connection)
+                    backup_connection.commit()
+            os.chmod(backup_database, 0o600)
+
+        manifest = {
+            "schema_version": "vibe.backtest-backup.v1",
+            "run_count": run_count,
+            "research_object_count": research_count,
+            "records": [
+                {
+                    "name": path.name,
+                    "sha256": path.stem,
+                    "size_bytes": path.stat(follow_symlinks=False).st_size,
+                }
+                for path in sorted((backtest_destination / "records").glob("*.json"))
+            ],
+        }
+        manifest_sha256 = canonical_sha256(manifest)
+        self._atomic_write(
+            destination / "manifest.json",
+            (
+                canonical_json(
+                    {
+                        **manifest,
+                        "manifest_sha256": manifest_sha256,
+                    }
+                )
+                + "\n"
+            ).encode("utf-8"),
+        )
+        restored_research = ResearchStore(
+            research_destination,
+            total_quota_bytes=self.research_store.total_quota_bytes,
+            max_object_bytes=self.research_store.max_object_bytes,
+        )
+        restored = BacktestRunStore(
+            backtest_destination,
+            research_store=restored_research,
+            max_record_bytes=self.max_record_bytes,
+            total_quota_bytes=self.total_quota_bytes,
+        )
+        with restored._connect() as connection:
+            rows = connection.execute(
+                "SELECT run_id, owner_scope FROM runs ORDER BY run_id"
+            ).fetchall()
+        if len(rows) != run_count:
+            raise BacktestRunIntegrityError("backup index count does not match records")
+        for row in rows:
+            if restored.get(row["run_id"], owner_scope=row["owner_scope"]) is None:
+                raise BacktestRunIntegrityError("backup cannot restore an indexed run")
+        return BacktestBackupResult(
+            destination=destination,
+            run_count=run_count,
+            research_object_count=research_count,
+            manifest_sha256=manifest_sha256,
+        )
+
+    def _ensure_transaction_locked(
+        self,
+        prepared: PreparedBacktestRun,
+        *,
+        idempotency_key: str,
+        record_payload: bytes,
+    ) -> _BacktestTransaction:
+        record = prepared.record
+        digest = canonical_sha256(
+            {
+                "owner_scope": record.owner_scope,
+                "idempotency_key": idempotency_key,
+            }
+        )
+        transaction = _BacktestTransaction(
+            transaction_id=f"backtest-txn:{digest}",
+            owner_scope=record.owner_scope,
+            idempotency_key=idempotency_key,
+            request_sha256=record.provenance.backtest_input_sha256,
+            record_sha256=record.content_sha256,
+            staged_record_name=f"backtest-txn-{digest}.record.json",
+            summary=prepared.object,
+        )
+        manifest_path = self._transaction_manifest_path(digest)
+        staged_path = self.transactions_dir / transaction.staged_record_name
+        committed_path = self._record_path(record.content_sha256)
+        if manifest_path.exists() or manifest_path.is_symlink():
+            existing = self._load_transaction(manifest_path)
+            if existing != transaction:
+                raise BacktestRunIdempotencyConflict(
+                    "pending transaction belongs to another BacktestRun"
+                )
+        if staged_path.exists() or staged_path.is_symlink():
+            if self._load_record(staged_path) != record:
+                raise BacktestRunIntegrityError(
+                    "pending transaction record contains different content"
+                )
+        elif committed_path.exists() or committed_path.is_symlink():
+            if self._load_record(committed_path) != record:
+                raise BacktestRunIntegrityError(
+                    "existing run path contains different content"
+                )
+            os.link(committed_path, staged_path)
+        else:
+            manifest_payload = (canonical_json(transaction) + "\n").encode("utf-8")
+            usage = self._artifact_bytes_on_disk()
+            if usage + len(record_payload) + len(manifest_payload) > self.total_quota_bytes:
+                raise BacktestRunQuotaExceeded(
+                    "BacktestRun transaction would exceed total_quota_bytes"
+                )
+            self._atomic_write(staged_path, record_payload)
+        if not manifest_path.exists():
+            manifest_payload = (canonical_json(transaction) + "\n").encode("utf-8")
+            usage = self._artifact_bytes_on_disk()
+            if usage + len(manifest_payload) > self.total_quota_bytes:
+                staged_path.unlink(missing_ok=True)
+                raise BacktestRunQuotaExceeded(
+                    "BacktestRun transaction would exceed total_quota_bytes"
+                )
+            self._atomic_write(manifest_path, manifest_payload)
+        return transaction
+
+    def _commit_transaction_locked(
+        self,
+        transaction: _BacktestTransaction,
+    ) -> PersistedBacktestRun:
+        manifest_digest = transaction.transaction_id.rsplit(":", 1)[1]
+        manifest_path = self._transaction_manifest_path(manifest_digest)
+        staged_path = self.transactions_dir / transaction.staged_record_name
+        target = self._record_path(transaction.record_sha256)
+        if not staged_path.exists() and target.exists():
+            os.link(target, staged_path)
+        record = self._load_record(staged_path)
+        if (
+            record.content_sha256 != transaction.record_sha256
+            or record.owner_scope != transaction.owner_scope
+            or record.provenance.backtest_input_sha256
+            != transaction.request_sha256
+        ):
+            raise BacktestRunIntegrityError(
+                "transaction record does not match its durable manifest"
+            )
+        expected_summary = _build_summary(
+            record,
+            created_at=transaction.summary.created_at,
+        )
+        if expected_summary != transaction.summary:
+            raise BacktestRunIntegrityError(
+                "transaction summary does not match its normalized record"
+            )
+        existing_idempotency = self._idempotency_row(
+            record.owner_scope,
+            transaction.idempotency_key,
+        )
+        if existing_idempotency is not None:
+            if (
+                existing_idempotency["run_id"] != record.run_id
+                or existing_idempotency["request_sha256"]
+                != record.provenance.backtest_input_sha256
+            ):
+                raise BacktestRunIdempotencyConflict(
+                    "idempotency key was used for another BacktestRun"
+                )
+            existing = self.get(record.run_id, owner_scope=record.owner_scope)
+            if existing is None:
+                raise BacktestRunIntegrityError(
+                    "idempotency index references a missing BacktestRun"
+                )
+            self._remove_transaction_files(manifest_path, staged_path)
+            return existing
+
+        record_created = False
+        if target.exists() or target.is_symlink():
+            if self._load_record(target) != record:
+                raise BacktestRunIntegrityError(
+                    "existing run path contains different content"
+                )
+        else:
+            try:
+                os.link(staged_path, target)
+            except FileExistsError:
+                pass
+            if self._load_record(target) != record:
+                raise BacktestRunIntegrityError(
+                    "new run path contains different content"
+                )
+            self._fsync_directory(self.records_dir)
+            record_created = True
+
+        object_result = self.research_store.put(transaction.summary)
+        self._index_committed_run(
+            record,
+            summary=object_result.object,
+            idempotency_key=transaction.idempotency_key,
+            target=target,
+        )
+        self._remove_transaction_files(manifest_path, staged_path)
+        return PersistedBacktestRun(
+            record=record,
+            object=object_result.object,
+            created=record_created or object_result.created,
+        )
+
+    def _index_committed_run(
+        self,
+        record: NormalizedBacktestRecord,
+        *,
+        summary: ResearchObject,
+        idempotency_key: str,
+        target: Path,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                INSERT INTO runs(
+                    run_id, owner_scope, strategy_stream_id,
+                    strategy_version_id, parent_strategy_version_id,
+                    request_sha256, record_sha256, backtest_object_id,
+                    relative_path, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id) DO NOTHING
+                """,
+                (
+                    record.run_id,
                     record.owner_scope,
+                    record.provenance.strategy_stream_id,
+                    record.provenance.strategy_version_id,
+                    record.provenance.parent_strategy_version_id,
                     record.provenance.backtest_input_sha256,
                     record.content_sha256,
-                    prepared.object.object_id,
-                ):
-                    raise BacktestRunIntegrityError(
-                        "run index conflicts with normalized record"
-                    )
-                connection.execute(
-                    """
-                    INSERT INTO idempotency_keys(
-                        owner_scope, idempotency_key, request_sha256, run_id
-                    ) VALUES (?, ?, ?, ?)
-                    """,
-                    (
-                        record.owner_scope,
-                        idempotency_key,
-                        record.provenance.backtest_input_sha256,
-                        record.run_id,
-                    ),
-                )
-                connection.commit()
-            return PersistedBacktestRun(
-                record=record,
-                object=object_result.object,
-                created=record_created or object_result.created,
+                    summary.object_id,
+                    target.relative_to(self.root).as_posix(),
+                    summary.created_at.isoformat(),
+                ),
             )
+            existing_run = connection.execute(
+                """
+                SELECT owner_scope, request_sha256, record_sha256,
+                       backtest_object_id
+                FROM runs WHERE run_id=?
+                """,
+                (record.run_id,),
+            ).fetchone()
+            if existing_run is None or tuple(existing_run) != (
+                record.owner_scope,
+                record.provenance.backtest_input_sha256,
+                record.content_sha256,
+                summary.object_id,
+            ):
+                raise BacktestRunIntegrityError(
+                    "run index conflicts with normalized record"
+                )
+            connection.execute(
+                """
+                INSERT INTO idempotency_keys(
+                    owner_scope, idempotency_key, request_sha256, run_id
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (
+                    record.owner_scope,
+                    idempotency_key,
+                    record.provenance.backtest_input_sha256,
+                    record.run_id,
+                ),
+            )
+            connection.commit()
+
+    def _remove_transaction_files(self, manifest: Path, staged: Path) -> None:
+        manifest.unlink(missing_ok=True)
+        staged.unlink(missing_ok=True)
+        self._fsync_directory(self.transactions_dir)
 
     def get(
         self,
@@ -1082,6 +1462,13 @@ class BacktestRunStore:
             raise BacktestRunIntegrityError("BacktestRun records must not be a symlink")
         self.records_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(self.records_dir, 0o700)
+        self._restore_record_tombstones()
+        if self.transactions_dir.is_symlink():
+            raise BacktestRunIntegrityError(
+                "BacktestRun transactions must not be a symlink"
+            )
+        self.transactions_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.transactions_dir, 0o700)
         if self.database_path.is_symlink():
             raise BacktestRunIntegrityError(
                 "BacktestRun database must not be a symlink"
@@ -1176,6 +1563,136 @@ class BacktestRunStore:
         if self.records_dir.is_symlink():
             raise BacktestRunIntegrityError("BacktestRun records must not be a symlink")
         return self.records_dir / f"{digest}.json"
+
+    def _transaction_manifest_path(self, digest: str) -> Path:
+        if not re.fullmatch(_SHA256_PATTERN, digest):
+            raise BacktestRunIntegrityError("invalid BacktestRun transaction digest")
+        if self.transactions_dir.is_symlink():
+            raise BacktestRunIntegrityError(
+                "BacktestRun transactions must not be a symlink"
+            )
+        return self.transactions_dir / f"backtest-txn-{digest}.json"
+
+    def _transaction_manifest_paths(self) -> tuple[Path, ...]:
+        paths: list[Path] = []
+        for path in sorted(self.transactions_dir.iterdir()):
+            metadata = path.lstat()
+            if path.name.endswith(".record.json"):
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise BacktestRunIntegrityError(
+                        "transaction staging entry must be a regular file"
+                    )
+                continue
+            if (
+                not re.fullmatch(r"backtest-txn-[0-9a-f]{64}\.json", path.name)
+                or not stat.S_ISREG(metadata.st_mode)
+            ):
+                raise BacktestRunIntegrityError(
+                    f"invalid BacktestRun transaction entry: {path}"
+                )
+            paths.append(path)
+        return tuple(paths)
+
+    def _clean_orphan_staging_locked(self) -> None:
+        referenced = {
+            self._load_transaction(path).staged_record_name
+            for path in self._transaction_manifest_paths()
+        }
+        changed = False
+        for path in self.transactions_dir.iterdir():
+            if path.name.endswith(".record.json") and path.name not in referenced:
+                metadata = path.lstat()
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise BacktestRunIntegrityError(
+                        "orphan transaction staging entry is not a regular file"
+                    )
+                path.unlink()
+                changed = True
+        if changed:
+            self._fsync_directory(self.transactions_dir)
+
+    def _record_paths(self) -> tuple[Path, ...]:
+        paths: list[Path] = []
+        for path in sorted(self.records_dir.iterdir()):
+            metadata = path.lstat()
+            if (
+                not re.fullmatch(r"[0-9a-f]{64}\.json", path.name)
+                or not stat.S_ISREG(metadata.st_mode)
+            ):
+                raise BacktestRunIntegrityError(
+                    f"invalid BacktestRun record entry: {path}"
+                )
+            paths.append(path)
+        return tuple(paths)
+
+    def _restore_record_tombstones(self) -> None:
+        for path in self.records_dir.iterdir():
+            match = re.fullmatch(r"\.([0-9a-f]{64}\.json)\.delete", path.name)
+            if match is None:
+                continue
+            if not stat.S_ISREG(path.lstat().st_mode):
+                raise BacktestRunIntegrityError(
+                    "BacktestRun deletion tombstone must be a regular file"
+                )
+            target = self.records_dir / match.group(1)
+            if target.exists() or target.is_symlink():
+                raise BacktestRunIntegrityError(
+                    "BacktestRun record and deletion tombstone both exist"
+                )
+            os.replace(path, target)
+            self._fsync_directory(self.records_dir)
+
+    def _load_transaction(self, path: Path) -> _BacktestTransaction:
+        try:
+            metadata = path.lstat()
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 1_048_576:
+                raise BacktestRunIntegrityError(
+                    "BacktestRun transaction manifest is invalid"
+                )
+            transaction = _BacktestTransaction.model_validate_json(path.read_bytes())
+        except (OSError, ValueError) as exc:
+            if isinstance(exc, BacktestRunIntegrityError):
+                raise
+            raise BacktestRunIntegrityError(
+                f"invalid BacktestRun transaction manifest: {path}"
+            ) from exc
+        digest = transaction.transaction_id.rsplit(":", 1)[1]
+        if path != self._transaction_manifest_path(digest):
+            raise BacktestRunIntegrityError(
+                "BacktestRun transaction identity does not match its path"
+            )
+        return transaction
+
+    def _artifact_bytes_on_disk(self) -> int:
+        seen: set[tuple[int, int]] = set()
+        total = 0
+        for path in (*self._record_paths(), *tuple(self.transactions_dir.iterdir())):
+            metadata = path.lstat()
+            if not stat.S_ISREG(metadata.st_mode):
+                raise BacktestRunIntegrityError(
+                    f"BacktestRun artifact must be a regular file: {path}"
+                )
+            identity = (metadata.st_dev, metadata.st_ino)
+            if identity not in seen:
+                seen.add(identity)
+                total += metadata.st_size
+        return total
+
+    def _validate_backup_destination(self, destination: Path) -> None:
+        if destination.is_symlink():
+            raise BacktestRunIntegrityError("backup destination must not be a symlink")
+        target = destination.resolve(strict=False)
+        for live_root in (self.root.resolve(), self.research_store.root.resolve()):
+            if target == live_root or live_root in target.parents or target in live_root.parents:
+                raise BacktestRunIntegrityError(
+                    "backup destination must be outside all live stores"
+                )
+        if destination.exists() and (
+            not destination.is_dir() or any(destination.iterdir())
+        ):
+            raise BacktestRunIntegrityError(
+                "backup destination must be an empty directory"
+            )
 
     @staticmethod
     def _validate_regular_file(path: Path) -> None:
@@ -1300,3 +1817,11 @@ class BacktestRunStore:
                     temporary_path.unlink()
                 except FileNotFoundError:
                     pass
+
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)

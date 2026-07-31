@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 import json
 from pathlib import Path
 import stat
@@ -20,13 +20,16 @@ from src.quant_engine import (
     BacktestRunError,
     BacktestRunIdempotencyConflict,
     BacktestRunIntegrityError,
+    BacktestRunQuotaExceeded,
     BacktestRunStore,
     NormalizedBacktestRecord,
     QuantaxisAdapter,
     normalize_quantaxis_backtest_run,
 )
 from src.research.contracts import (
+    ResearchReport,
     ResearchSpec,
+    canonical_json,
     canonical_sha256,
     create_research_object,
 )
@@ -451,3 +454,180 @@ def test_qe5_3_tampered_record_fails_closed_on_restore(tmp_path: Path) -> None:
             prepared.record.run_id,
             owner_scope=version.owner_scope,
         )
+
+
+def test_qe5_4_transaction_journal_recovers_cross_store_index_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, _result, snapshot, compilation, version, _head, _card, _receipt = (
+        _run_chain(tmp_path / "fixture")
+    )
+    research_store = ResearchStore(tmp_path / "research")
+    _store_parents(
+        research_store,
+        snapshot=snapshot,
+        compilation=compilation,
+        version=version,
+    )
+    root = tmp_path / "backtests"
+    store = BacktestRunStore(root, research_store=research_store)
+
+    def fail_index(*_args, **_kwargs):
+        raise RuntimeError("simulated run index crash")
+
+    monkeypatch.setattr(store, "_index_committed_run", fail_index)
+    with pytest.raises(RuntimeError, match="simulated run index crash"):
+        store.put(prepared, idempotency_key="recover-index-crash")
+    assert tuple(store.transactions_dir.glob("backtest-txn-*.json"))
+    blocked_backup = tmp_path / "blocked-backup"
+    with pytest.raises(BacktestRunIntegrityError, match="pending transactions"):
+        store.backup_to(blocked_backup)
+    assert not blocked_backup.exists()
+
+    recovered = BacktestRunStore(root, research_store=research_store)
+    assert recovered.pending_recovery_count == 1
+    assert not tuple(recovered.transactions_dir.iterdir())
+    restored = recovered.get_by_idempotency_key(
+        owner_scope=version.owner_scope,
+        idempotency_key="recover-index-crash",
+    )
+    assert restored is not None
+    assert restored.record == prepared.record
+
+
+def test_qe5_4_run_quota_fails_before_staging_or_history_mutation(
+    tmp_path: Path,
+) -> None:
+    prepared, _result, snapshot, compilation, version, _head, _card, _receipt = (
+        _run_chain(tmp_path / "fixture")
+    )
+    research_store = ResearchStore(tmp_path / "research")
+    _store_parents(
+        research_store,
+        snapshot=snapshot,
+        compilation=compilation,
+        version=version,
+    )
+    record_bytes = len((canonical_json(prepared.record) + "\n").encode("utf-8"))
+    store = BacktestRunStore(
+        tmp_path / "backtests",
+        research_store=research_store,
+        max_record_bytes=record_bytes,
+        total_quota_bytes=record_bytes,
+    )
+
+    with pytest.raises(BacktestRunQuotaExceeded, match="quota"):
+        store.put(prepared, idempotency_key="quota-rejected")
+    assert not tuple(store.records_dir.iterdir())
+    assert not tuple(store.transactions_dir.iterdir())
+    assert research_store.get(
+        prepared.object.object_id,
+        owner_scope=version.owner_scope,
+    ) is None
+
+
+def test_qe5_4_consistent_bundle_backup_restores_run_and_research(
+    tmp_path: Path,
+) -> None:
+    prepared, _result, snapshot, compilation, version, _head, _card, _receipt = (
+        _run_chain(tmp_path / "fixture")
+    )
+    research_store = ResearchStore(tmp_path / "research")
+    _store_parents(
+        research_store,
+        snapshot=snapshot,
+        compilation=compilation,
+        version=version,
+    )
+    store = BacktestRunStore(
+        tmp_path / "backtests",
+        research_store=research_store,
+    )
+    persisted = store.put(prepared, idempotency_key="backup-run")
+
+    result = store.backup_to(tmp_path / "isolated-backup")
+    assert result.run_count == 1
+    assert result.research_object_count == 5
+    manifest = json.loads(
+        (result.destination / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["manifest_sha256"] == result.manifest_sha256
+
+    restored_research = ResearchStore(result.destination / "research")
+    restored = BacktestRunStore(
+        result.destination / "backtests",
+        research_store=restored_research,
+    )
+    restored_run = restored.get(
+        persisted.record.run_id,
+        owner_scope=version.owner_scope,
+    )
+    assert restored_run is not None
+    assert restored_run.record == persisted.record
+    assert restored.get_by_idempotency_key(
+        owner_scope=version.owner_scope,
+        idempotency_key="backup-run",
+    ) == restored_run
+
+
+def test_qe5_4_retention_deletes_only_old_unreferenced_runs(
+    tmp_path: Path,
+) -> None:
+    first, _result, snapshot, compilation, version, _head, _card, _receipt = (
+        _run_chain(tmp_path / "first", initial_cash_fen=1_000_000)
+    )
+    second, *_rest = _run_chain(
+        tmp_path / "second",
+        initial_cash_fen=2_000_000,
+    )
+    research_store = ResearchStore(tmp_path / "research")
+    _store_parents(
+        research_store,
+        snapshot=snapshot,
+        compilation=compilation,
+        version=version,
+    )
+    store = BacktestRunStore(
+        tmp_path / "backtests",
+        research_store=research_store,
+    )
+    store.put(first, idempotency_key="retention-first")
+    store.put(second, idempotency_key="retention-second")
+
+    removed = store.prune_unreferenced(
+        owner_scope=version.owner_scope,
+        keep_last=1,
+        created_before=datetime.max.replace(tzinfo=timezone.utc),
+    )
+    assert len(removed) == 1
+    remaining = store.list_for_strategy_stream(
+        version.stream_id,
+        owner_scope=version.owner_scope,
+    )
+    assert len(remaining) == 1
+
+    report = create_research_object(
+            ResearchReport(
+                research_spec_ref=snapshot.parent_refs[0],
+                evidence_refs=(),
+            backtest_run_refs=(remaining[0].object.ref(),),
+            title="Retained backtest",
+            summary="The retained run is referenced by this report.",
+        ),
+        owner_scope=version.owner_scope,
+        parent_refs=(
+            snapshot.parent_refs[0],
+            remaining[0].object.ref(),
+        ),
+    )
+    research_store.put(report)
+    assert store.prune_unreferenced(
+        owner_scope=version.owner_scope,
+        keep_last=0,
+        created_before=datetime.max.replace(tzinfo=timezone.utc),
+    ) == ()
+    assert store.get(
+        remaining[0].record.run_id,
+        owner_scope=version.owner_scope,
+    ) == remaining[0]

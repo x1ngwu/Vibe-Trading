@@ -8,6 +8,7 @@ import hashlib
 import os
 from pathlib import Path
 import tempfile
+from threading import Event
 from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -315,6 +316,9 @@ class QuantaxisAdapter:
         timeout_seconds: float,
         max_stdout_bytes: int | None = None,
         max_stderr_bytes: int | None = None,
+        memory_bytes: int | None = None,
+        max_open_files: int | None = None,
+        cancel_event: Event | None = None,
     ) -> Mapping[str, Any]:
         path = snapshot_path.absolute()
         snapshot_sha256 = compute_snapshot_sha256(path)
@@ -330,6 +334,12 @@ class QuantaxisAdapter:
             run_kwargs["max_stdout_bytes"] = max_stdout_bytes
         if max_stderr_bytes is not None:
             run_kwargs["max_stderr_bytes"] = max_stderr_bytes
+        if memory_bytes is not None:
+            run_kwargs["memory_bytes"] = memory_bytes
+        if max_open_files is not None:
+            run_kwargs["max_open_files"] = max_open_files
+        if cancel_event is not None:
+            run_kwargs["cancel_event"] = cancel_event
         run = self.runner.run(
             **run_kwargs,
         )
@@ -600,6 +610,7 @@ class QuantaxisAdapter:
         snapshot: ResearchObject,
         snapshot_path: Path,
         initial_cash_fen: int,
+        cancel_event: Event | None = None,
     ) -> QuantaxisBacktestResult:
         """Run one exact confirmed plan and reconcile every daily position."""
 
@@ -647,6 +658,9 @@ class QuantaxisAdapter:
             timeout_seconds=request.resource_limits.timeout_seconds,
             max_stdout_bytes=request.resource_limits.max_stdout_bytes,
             max_stderr_bytes=request.resource_limits.max_stderr_bytes,
+            memory_bytes=request.resource_limits.memory_bytes,
+            max_open_files=256,
+            cancel_event=cancel_event,
         )
         result = QuantaxisBacktestWorkerResult.model_validate(raw)
         if (

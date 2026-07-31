@@ -444,6 +444,8 @@ def test_qe5_2_confirmed_plan_runs_worker_and_reconciles_daily_oracle(
     assert result.ledger.data_snapshot_sha256 == compute_snapshot_sha256(snapshot_path)
     assert runner.calls[0]["operation"] == "backtest"
     assert runner.calls[0]["timeout_seconds"] == 30
+    assert runner.calls[0]["memory_bytes"] == 268_435_456
+    assert runner.calls[0]["max_open_files"] == 256
     order_dates = [
         event.trade_date
         for event in result.worker.events

@@ -11,6 +11,11 @@ from typing import Any, Mapping
 
 from worker_runtime import run_worker
 
+try:
+    import resource
+except ImportError:  # pragma: no cover - Windows fixture fallback
+    resource = None  # type: ignore[assignment]
+
 
 ENGINE_NAME = "fake"
 ENGINE_COMMIT = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -60,6 +65,15 @@ def non_finite_output(payload: Mapping[str, Any], snapshot: Mapping[str, Any] | 
     return {"not_finite": float("nan")}
 
 
+def resource_limits(payload: Mapping[str, Any], snapshot: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    if resource is None:  # pragma: no cover - guarded by the parent test
+        raise RuntimeError("resource module unavailable")
+    return {
+        "address_space": list(resource.getrlimit(resource.RLIMIT_AS)),
+        "open_files": list(resource.getrlimit(resource.RLIMIT_NOFILE)),
+    }
+
+
 if __name__ == "__main__":
     raise SystemExit(
         run_worker(
@@ -72,6 +86,7 @@ if __name__ == "__main__":
                 "large_stderr": large_stderr,
                 "non_finite_output": non_finite_output,
                 "pollute_stdout": pollute_stdout,
+                "resource_limits": resource_limits,
                 "sleep_forever": sleep_forever,
                 "spawn_and_sleep": spawn_and_sleep,
                 "truncate_stdout": truncate_stdout,

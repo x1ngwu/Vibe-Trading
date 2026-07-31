@@ -268,10 +268,30 @@ class WorkerRunner:
         timeout_seconds: float = 30.0,
         max_stdout_bytes: int = 1_048_576,
         max_stderr_bytes: int = 1_048_576,
+        memory_bytes: int | None = None,
+        max_open_files: int | None = None,
         cancel_event: Event | None = None,
     ) -> RunResult:
         """Execute and validate one worker request."""
 
+        if memory_bytes is not None and (
+            isinstance(memory_bytes, bool)
+            or not isinstance(memory_bytes, int)
+            or memory_bytes < 67_108_864
+        ):
+            raise WorkerExecutionError(
+                "INVALID_LIMIT",
+                "memory_bytes must be an integer of at least 67108864",
+            )
+        if max_open_files is not None and (
+            isinstance(max_open_files, bool)
+            or not isinstance(max_open_files, int)
+            or not 32 <= max_open_files <= 65_536
+        ):
+            raise WorkerExecutionError(
+                "INVALID_LIMIT",
+                "max_open_files must be an integer in [32, 65536]",
+            )
         normalized_snapshot: str | None = None
         if snapshot_path is not None:
             resolved_snapshot = self._validate_snapshot_path(snapshot_path, self.config.snapshot_root)
@@ -312,8 +332,23 @@ class WorkerRunner:
         peak_rss: int | None = None
         failure_code: str | None = None
         try:
+            command = [str(self.config.python), "-B", str(self.config.script)]
+            if memory_bytes is not None or max_open_files is not None:
+                if os.name != "posix" or not (prlimit := shutil.which("prlimit")):
+                    raise WorkerExecutionError(
+                        "RESOURCE_GUARD_UNAVAILABLE",
+                        "hard memory/FD limits require the trusted prlimit launcher",
+                    )
+                command = [prlimit]
+                if memory_bytes is not None:
+                    command.append(f"--as={memory_bytes}:{memory_bytes}")
+                if max_open_files is not None:
+                    command.append(f"--nofile={max_open_files}:{max_open_files}")
+                command.extend(
+                    ["--", str(self.config.python), "-B", str(self.config.script)]
+                )
             proc = subprocess.Popen(
-                [str(self.config.python), "-B", str(self.config.script)],
+                command,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import os
+import re
 import sqlite3
 import stat
 import tempfile
@@ -256,6 +257,54 @@ class ResearchStore:
             raise StoreIntegrityError("backup index rebuild did not preserve every object")
         return copied
 
+    def delete_leaf(
+        self,
+        object_id: str,
+        *,
+        owner_scope: str = DEFAULT_OWNER_SCOPE,
+    ) -> bool:
+        """Delete one unreferenced immutable leaf for an explicit retention policy.
+
+        Returns ``False`` when the object is absent, belongs to another owner,
+        or is still referenced. A tombstone rename makes an interrupted delete
+        conservative: initialization restores the object and a later policy
+        pass can retry it.
+        """
+
+        object_type, digest = self._parse_object_id(object_id)
+        target = self._object_path(object_type, digest)
+        with self._exclusive_lock():
+            if not target.exists() and not target.is_symlink():
+                return False
+            loaded = self._load_path(target)
+            if loaded.object_id != object_id:
+                raise StoreIntegrityError("object file identity does not match its path")
+            if loaded.owner_scope != owner_scope:
+                return False
+            for path in self._iter_object_paths():
+                candidate = self._load_path(path)
+                if any(parent.object_id == object_id for parent in candidate.parent_refs):
+                    return False
+            tombstone = target.with_name(f".{target.name}.delete")
+            if tombstone.exists() or tombstone.is_symlink():
+                raise StoreIntegrityError("object deletion tombstone already exists")
+            os.replace(target, tombstone)
+            self._fsync_directory(target.parent)
+            try:
+                with self._connect() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    connection.execute("DELETE FROM parents WHERE object_id=?", (object_id,))
+                    connection.execute("DELETE FROM objects WHERE object_id=?", (object_id,))
+                    connection.commit()
+                tombstone.unlink()
+                self._fsync_directory(target.parent)
+                return True
+            except Exception:
+                if tombstone.exists() and not target.exists():
+                    os.replace(tombstone, target)
+                    self._fsync_directory(target.parent)
+                raise
+
     def _prepare_root(self) -> None:
         if self.root.is_symlink():
             raise StoreIntegrityError("research store root must not be a symlink")
@@ -263,6 +312,7 @@ class ResearchStore:
         if self.objects_dir.is_symlink():
             raise StoreIntegrityError("research objects directory must not be a symlink")
         self.objects_dir.mkdir(parents=True, exist_ok=True)
+        self._restore_deletion_tombstones()
         if self.database_path.is_symlink():
             raise StoreIntegrityError("research database must not be a symlink")
         if self.lock_path.is_symlink():
@@ -435,6 +485,26 @@ class ResearchStore:
             raise StoreIntegrityError("object type directory must not be a symlink")
         return type_dir / f"{digest}.json"
 
+    def _restore_deletion_tombstones(self) -> None:
+        for type_dir in self.objects_dir.iterdir():
+            if not type_dir.is_dir() or type_dir.is_symlink():
+                continue
+            for path in type_dir.iterdir():
+                match = re.fullmatch(r"\.([0-9a-f]{64}\.json)\.delete", path.name)
+                if match is None:
+                    continue
+                if not stat.S_ISREG(path.lstat().st_mode):
+                    raise StoreIntegrityError(
+                        f"object deletion tombstone is not a regular file: {path}"
+                    )
+                target = type_dir / match.group(1)
+                if target.exists() or target.is_symlink():
+                    raise StoreIntegrityError(
+                        "object and deletion tombstone both exist"
+                    )
+                os.replace(path, target)
+                self._fsync_directory(type_dir)
+
     @staticmethod
     def _parse_object_id(object_id: str) -> tuple[ObjectType, str]:
         try:
@@ -485,6 +555,14 @@ class ResearchStore:
                     temporary_path.unlink()
                 except FileNotFoundError:
                     pass
+
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
 
 def _is_sha256(value: str) -> bool:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 import sys
@@ -132,6 +133,21 @@ def test_timeout_terminates_worker_process_group(runner: WorkerRunner, tmp_path:
         time.sleep(0.02)
     if Path(f"/proc/{child_pid}").exists():
         assert Path(f"/proc/{child_pid}/stat").read_text(encoding="utf-8").split()[2] == "Z"
+
+
+@pytest.mark.skipif(shutil.which("prlimit") is None, reason="prlimit unavailable")
+def test_worker_hard_memory_and_fd_limits_are_applied_before_dispatch(
+    runner: WorkerRunner,
+) -> None:
+    result = runner.run(
+        request_id="qe5-hard-resource-limits",
+        operation="resource_limits",
+        memory_bytes=536_870_912,
+        max_open_files=64,
+    )
+
+    assert result.response["result"]["address_space"] == [536_870_912, 536_870_912]
+    assert result.response["result"]["open_files"] == [64, 64]
 
 
 def test_snapshot_path_is_bounded_and_rejects_symlinks_and_special_files(
