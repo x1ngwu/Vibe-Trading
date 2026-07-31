@@ -393,7 +393,7 @@ def _parse_snapshot(snapshot: Mapping[str, Any] | None) -> dict[str, Any]:
         }
 
     actions: list[dict[str, Any]] = []
-    action_keys = {
+    action_common_keys = {
         "action_id",
         "symbol",
         "kind",
@@ -403,11 +403,25 @@ def _parse_snapshot(snapshot: Mapping[str, Any] | None) -> dict[str, Any]:
         "pay_date",
         "multiplier_numerator",
         "multiplier_denominator",
-        "cash_per_share_fen",
+    }
+    legacy_action_keys = action_common_keys | {"cash_per_share_fen"}
+    rational_action_keys = action_common_keys | {
+        "cash_per_share_numerator_fen",
+        "cash_per_share_denominator",
+        "cash_rounding",
     }
     action_ids: set[str] = set()
     for index, item in enumerate(root["corporate_actions"]):
-        action = _exact(item, action_keys, f"corporate_actions[{index}]")
+        item_keys = frozenset(item) if isinstance(item, Mapping) else frozenset()
+        if item_keys not in {
+            frozenset(legacy_action_keys),
+            frozenset(rational_action_keys),
+        }:
+            raise WorkerError(
+                "INVALID_OPERATION_INPUT",
+                f"corporate_actions[{index}] keys do not match schema",
+            )
+        action = item
         kind = action["kind"]
         if kind not in {"share_split", "cash_dividend"}:
             raise WorkerError("UNSUPPORTED_SEMANTICS", "unsupported corporate action")
@@ -435,6 +449,63 @@ def _parse_snapshot(snapshot: Mapping[str, Any] | None) -> dict[str, Any]:
         if action_id in action_ids:
             raise WorkerError("INVALID_OPERATION_INPUT", "duplicate corporate action id")
         action_ids.add(action_id)
+        if set(action) == legacy_action_keys:
+            legacy_cash_per_share_fen = _integer(
+                action["cash_per_share_fen"],
+                "cash_per_share_fen",
+                minimum=0,
+            )
+            cash_numerator_fen = legacy_cash_per_share_fen
+            cash_denominator = 1
+            amount_schema = "legacy_integer_fen"
+        else:
+            legacy_cash_per_share_fen = None
+            cash_numerator_fen = _integer(
+                action["cash_per_share_numerator_fen"],
+                "cash_per_share_numerator_fen",
+                minimum=0,
+            )
+            cash_denominator = _integer(
+                action["cash_per_share_denominator"],
+                "cash_per_share_denominator",
+                minimum=1,
+            )
+            cash_rounding = action["cash_rounding"]
+            if cash_rounding not in {
+                "none",
+                "reject_fractional_fen",
+                "half_up_total_fen",
+            }:
+                raise WorkerError(
+                    "INVALID_OPERATION_INPUT",
+                    "cash dividend rounding policy is unsupported",
+                )
+            amount_schema = "rational_fen_per_share"
+        if set(action) == legacy_action_keys:
+            cash_rounding = None
+        if kind == "share_split" and (
+            cash_numerator_fen != 0
+            or cash_denominator != 1
+            or cash_rounding not in {None, "none"}
+        ):
+            raise WorkerError(
+                "INVALID_OPERATION_INPUT",
+                "share split cannot carry a cash amount",
+            )
+        if kind == "cash_dividend" and cash_numerator_fen <= 0:
+            raise WorkerError(
+                "INVALID_OPERATION_INPUT",
+                "cash dividend amount must be positive",
+            )
+        if (
+            kind == "cash_dividend"
+            and amount_schema == "rational_fen_per_share"
+            and cash_rounding == "none"
+        ):
+            raise WorkerError(
+                "INVALID_OPERATION_INPUT",
+                "cash dividend requires an explicit rounding policy",
+            )
         actions.append(
             {
                 "action_id": action_id,
@@ -450,9 +521,11 @@ def _parse_snapshot(snapshot: Mapping[str, Any] | None) -> dict[str, Any]:
                 "multiplier_denominator": _integer(
                     action["multiplier_denominator"], "multiplier_denominator", minimum=1
                 ),
-                "cash_per_share_fen": _integer(
-                    action["cash_per_share_fen"], "cash_per_share_fen", minimum=0
-                ),
+                "cash_per_share_fen": legacy_cash_per_share_fen,
+                "cash_per_share_numerator_fen": cash_numerator_fen,
+                "cash_per_share_denominator": cash_denominator,
+                "cash_rounding": cash_rounding,
+                "cash_amount_schema": amount_schema,
             }
         )
     actions.sort(key=lambda item: (item["ex_date"], item["action_id"]))
@@ -919,8 +992,20 @@ def _backtest(
                         "market_rule_id": None,
                     }
                 )
-            elif action["cash_per_share_fen"] > 0:
-                amount = held * action["cash_per_share_fen"]
+            elif action["cash_per_share_numerator_fen"] > 0:
+                amount, remainder = divmod(
+                    held * action["cash_per_share_numerator_fen"],
+                    action["cash_per_share_denominator"],
+                )
+                if remainder and action["cash_rounding"] == "half_up_total_fen":
+                    amount += int(
+                        remainder * 2 >= action["cash_per_share_denominator"]
+                    )
+                elif remainder:
+                    raise WorkerError(
+                        "UNSUPPORTED_SEMANTICS",
+                        "cash dividend entitlement is not representable in integer fen",
+                    )
                 receivables[action["symbol"]] = receivables.get(action["symbol"], 0) + amount
                 events.append(
                     {
@@ -933,6 +1018,24 @@ def _backtest(
                         "multiplier_denominator": None,
                         "entitled_shares": held,
                         "cash_per_share_fen": action["cash_per_share_fen"],
+                        "cash_per_share_numerator_fen": (
+                            action["cash_per_share_numerator_fen"]
+                            if action["cash_amount_schema"]
+                            == "rational_fen_per_share"
+                            else None
+                        ),
+                        "cash_per_share_denominator": (
+                            action["cash_per_share_denominator"]
+                            if action["cash_amount_schema"]
+                            == "rational_fen_per_share"
+                            else None
+                        ),
+                        "cash_rounding": (
+                            action["cash_rounding"]
+                            if action["cash_amount_schema"]
+                            == "rational_fen_per_share"
+                            else None
+                        ),
                         "market_rule_id": None,
                     }
                 )

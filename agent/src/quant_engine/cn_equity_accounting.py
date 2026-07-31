@@ -697,10 +697,13 @@ class CnEquityAccount:
         trade_date: date,
         symbol: str,
         entitled_shares: int,
-        cash_per_share_fen: int,
+        cash_per_share_fen: int | None = None,
+        cash_per_share_numerator_fen: int | None = None,
+        cash_per_share_denominator: int | None = None,
+        cash_rounding: str | None = None,
         mark_prices_fen: Mapping[str, int],
     ) -> CnEquityLedgerEntry:
-        """Accrue a content-bound cash dividend without crediting cash early."""
+        """Accrue an exact rational cash dividend without crediting cash early."""
 
         self._require_chronological(trade_date)
         held = self.positions.get(symbol, 0)
@@ -708,9 +711,45 @@ class CnEquityAccount:
             raise CnEquityAccountingError(
                 "dividend entitlement exceeds the held record-date position"
             )
-        if cash_per_share_fen <= 0:
-            raise CnEquityAccountingError("cash dividend must be positive")
-        amount = entitled_shares * cash_per_share_fen
+        if cash_per_share_fen is not None:
+            if (
+                cash_per_share_fen <= 0
+                or cash_per_share_numerator_fen is not None
+                or cash_per_share_denominator is not None
+                or cash_rounding is not None
+            ):
+                raise CnEquityAccountingError(
+                    "cash dividend must use one positive amount representation"
+                )
+            numerator = cash_per_share_fen
+            denominator = 1
+        else:
+            if (
+                cash_per_share_numerator_fen is None
+                or cash_per_share_numerator_fen <= 0
+                or cash_per_share_denominator is None
+                or cash_per_share_denominator <= 0
+            ):
+                raise CnEquityAccountingError(
+                    "cash dividend rational amount must be positive"
+                )
+            numerator = cash_per_share_numerator_fen
+            denominator = cash_per_share_denominator
+            if cash_rounding not in {
+                None,
+                "reject_fractional_fen",
+                "half_up_total_fen",
+            }:
+                raise CnEquityAccountingError(
+                    "cash dividend rounding policy is unsupported"
+                )
+        amount, remainder = divmod(entitled_shares * numerator, denominator)
+        if remainder and cash_rounding == "half_up_total_fen":
+            amount += int(remainder * 2 >= denominator)
+        elif remainder:
+            raise CnEquityAccountingError(
+                "cash dividend entitlement is not representable in integer fen"
+            )
         self._receivables[symbol] = self._receivables.get(symbol, 0) + amount
         return self._append(
             trade_date=trade_date,

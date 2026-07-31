@@ -1,0 +1,46 @@
+{
+  "schema_version": "vibe.qe5-universe-manifest.v1",
+  "universe_id": "qe5-baostock-household-uat-v1",
+  "instruments": [
+    {
+      "symbol": "000568.SZ",
+      "board": "sz_main"
+    },
+    {
+      "symbol": "000596.SZ",
+      "board": "sz_main"
+    },
+    {
+      "symbol": "000799.SZ",
+      "board": "sz_main"
+    },
+    {
+      "symbol": "000895.SZ",
+      "board": "sz_main"
+    },
+    {
+      "symbol": "002304.SZ",
+      "board": "sz_main"
+    },
+    {
+      "symbol": "600132.SH",
+      "board": "sh_main"
+    },
+    {
+      "symbol": "600600.SH",
+      "board": "sh_main"
+    },
+    {
+      "symbol": "600809.SH",
+      "board": "sh_main"
+    },
+    {
+      "symbol": "600887.SH",
+      "board": "sh_main"
+    },
+    {
+      "symbol": "603369.SH",
+      "board": "sh_main"
+    }
+  ]
+}

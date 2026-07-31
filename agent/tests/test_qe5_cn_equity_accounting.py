@@ -186,6 +186,55 @@ def test_fee_schedule_uses_per_charge_half_up_and_minimum_commission() -> None:
     assert sell.total_fen == 600 + 1000 + 20
 
 
+def test_cash_dividend_supports_exact_sub_fen_per_share_rate() -> None:
+    account = _account()
+    account.submit_order(
+        _order(
+            "buy-rational-dividend",
+            date(2025, 1, 3),
+            "600002.SH",
+            "buy",
+            100,
+            2_000,
+        )
+    )
+    accrued = account.accrue_dividend(
+        trade_date=date(2025, 1, 6),
+        symbol="600002.SH",
+        entitled_shares=100,
+        cash_per_share_numerator_fen=155,
+        cash_per_share_denominator=2,
+        mark_prices_fen={"600002.SH": 1_970},
+    )
+    assert accrued.dividend_receivable_delta_fen == 7_750
+
+    before = account.ledger()
+    with pytest.raises(
+        CnEquityAccountingError,
+        match="not representable in integer fen",
+    ):
+        account.accrue_dividend(
+            trade_date=date(2025, 1, 7),
+            symbol="600002.SH",
+            entitled_shares=100,
+            cash_per_share_numerator_fen=1,
+            cash_per_share_denominator=3,
+            mark_prices_fen={"600002.SH": 1_980},
+        )
+    assert account.ledger() == before
+
+    rounded = account.accrue_dividend(
+        trade_date=date(2025, 1, 7),
+        symbol="600002.SH",
+        entitled_shares=100,
+        cash_per_share_numerator_fen=2_700_039,
+        cash_per_share_denominator=5_000,
+        cash_rounding="half_up_total_fen",
+        mark_prices_fen={"600002.SH": 1_980},
+    )
+    assert rounded.dividend_receivable_delta_fen == 54_001
+
+
 def test_t_plus_one_rejection_has_no_effect_and_next_day_sell_is_allowed() -> None:
     account = _account()
     buy = account.submit_order(

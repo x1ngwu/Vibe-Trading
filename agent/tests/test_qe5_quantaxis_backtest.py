@@ -472,6 +472,46 @@ def test_qe5_2_confirmed_plan_runs_worker_and_reconciles_daily_oracle(
     assert replay.ledger.content_sha256 == result.ledger.content_sha256
 
 
+def test_qe5_2_rational_cash_dividend_reconciles_exactly(
+    tmp_path: Path,
+) -> None:
+    payload = _snapshot_payload()
+    action = payload["corporate_actions"][0]
+    del action["cash_per_share_fen"]
+    action["cash_per_share_numerator_fen"] = 2_700_039
+    action["cash_per_share_denominator"] = 5_000
+    action["cash_rounding"] = "half_up_total_fen"
+    snapshot_path, snapshot, compilation, version, head, card, receipt = (
+        _confirmed_chain(tmp_path, snapshot_payload=payload)
+    )
+
+    result = QuantaxisAdapter(_WorkerRunner()).backtest(  # type: ignore[arg-type]
+        compilation=compilation,
+        version=version,
+        head=head,
+        card=card,
+        receipt=receipt,
+        snapshot=snapshot,
+        snapshot_path=snapshot_path,
+        initial_cash_fen=1_000_000,
+    )
+    event = next(
+        item for item in result.worker.events if item.event == "dividend_ex"
+    )
+    assert event.cash_per_share_fen is None
+    assert event.cash_per_share_numerator_fen == 2_700_039
+    assert event.cash_per_share_denominator == 5_000
+    assert event.cash_rounding == "half_up_total_fen"
+    ledger_entry = next(
+        item for item in result.ledger.entries if item.event == "dividend_ex"
+    )
+    numerator = event.entitled_shares * 2_700_039
+    quotient, remainder = divmod(numerator, 5_000)
+    assert ledger_entry.dividend_receivable_delta_fen == (
+        quotient + int(remainder * 2 >= 5_000)
+    )
+
+
 def test_qe5_2_uses_pinned_quantaxis_factor_for_strategy_ranking(
     tmp_path: Path,
 ) -> None:
@@ -943,3 +983,56 @@ def test_qe5_2_real_pinned_quantaxis_worker_is_offline_and_replayable(
     )
     assert first.worker == second.worker
     assert first.ledger.content_sha256 == second.ledger.content_sha256
+
+
+@pytest.mark.integration
+def test_qe5_2_real_pinned_worker_reconciles_rational_cash_dividend(
+    tmp_path: Path,
+) -> None:
+    python_text = os.environ.get("VIBE_QE0_QUANTAXIS_PYTHON")
+    if not python_text:
+        pytest.skip("set VIBE_QE0_QUANTAXIS_PYTHON to run pinned QE5 backtest")
+    payload = _snapshot_payload()
+    action = payload["corporate_actions"][0]
+    del action["cash_per_share_fen"]
+    action.update(
+        {
+            "cash_per_share_numerator_fen": 2_700_039,
+            "cash_per_share_denominator": 5_000,
+            "cash_rounding": "half_up_total_fen",
+        }
+    )
+    snapshot_path, snapshot, compilation, version, head, card, receipt = (
+            _confirmed_chain(
+                tmp_path,
+                snapshot_payload=payload,
+                draft_model=_DraftModel(),
+            )
+    )
+    runner = WorkerRunner(
+        WorkerConfig(
+            engine=EngineIdentity("quantaxis", QUANTAXIS_ENGINE_COMMIT),
+            python=Path(python_text).absolute(),
+            script=(WORKER_DIR / "worker.py").resolve(),
+            snapshot_root=tmp_path.resolve(),
+        ),
+        common_runtime=COMMON_DIR.resolve(),
+    )
+    result = QuantaxisAdapter(runner).backtest(
+        compilation=compilation,
+        version=version,
+        head=head,
+        card=card,
+        receipt=receipt,
+        snapshot=snapshot,
+        snapshot_path=snapshot_path,
+        initial_cash_fen=1_000_000,
+    )
+
+    event = next(
+        item for item in result.worker.events if item.event == "dividend_ex"
+    )
+    assert event.cash_per_share_numerator_fen == 2_700_039
+    assert event.cash_per_share_denominator == 5_000
+    assert event.cash_rounding == "half_up_total_fen"
+    assert any(item.event == "dividend_pay" for item in result.ledger.entries)

@@ -72,6 +72,12 @@ class QuantaxisBacktestEvent(_StrictModel):
     multiplier_denominator: int | None = Field(default=None, gt=0)
     entitled_shares: int | None = Field(default=None, gt=0)
     cash_per_share_fen: int | None = Field(default=None, gt=0)
+    cash_per_share_numerator_fen: int | None = Field(default=None, gt=0)
+    cash_per_share_denominator: int | None = Field(default=None, gt=0)
+    cash_rounding: Literal[
+        "reject_fractional_fen",
+        "half_up_total_fen",
+    ] | None = None
     market_rule_id: str | None = Field(
         default=None,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
@@ -89,6 +95,9 @@ class QuantaxisBacktestEvent(_StrictModel):
                 or self.multiplier_denominator is not None
                 or self.entitled_shares is not None
                 or self.cash_per_share_fen is not None
+                or self.cash_per_share_numerator_fen is not None
+                or self.cash_per_share_denominator is not None
+                or self.cash_rounding is not None
             ):
                 raise ValueError("order event requires a same-date order")
             if self.market_rule_id is None:
@@ -103,6 +112,9 @@ class QuantaxisBacktestEvent(_StrictModel):
                 or self.multiplier_denominator is not None
                 or self.entitled_shares is not None
                 or self.cash_per_share_fen is not None
+                or self.cash_per_share_numerator_fen is not None
+                or self.cash_per_share_denominator is not None
+                or self.cash_rounding is not None
             ):
                 raise ValueError("mark event requires mark_prices_fen")
         elif self.event in {"share_split", "dividend_ex", "dividend_pay"}:
@@ -114,16 +126,35 @@ class QuantaxisBacktestEvent(_StrictModel):
         ):
             raise ValueError("share_split requires an exact multiplier")
         if self.event == "share_split" and (
-            self.entitled_shares is not None or self.cash_per_share_fen is not None
+            self.entitled_shares is not None
+            or self.cash_per_share_fen is not None
+            or self.cash_per_share_numerator_fen is not None
+            or self.cash_per_share_denominator is not None
+            or self.cash_rounding is not None
         ):
             raise ValueError("share_split cannot contain dividend data")
-        if self.event == "dividend_ex" and (
-            self.entitled_shares is None
-            or self.cash_per_share_fen is None
-            or self.multiplier_numerator is not None
-            or self.multiplier_denominator is not None
-        ):
-            raise ValueError("dividend_ex requires entitlement and cash amount")
+        if self.event == "dividend_ex":
+            legacy_amount = (
+                self.cash_per_share_fen is not None
+                and self.cash_per_share_numerator_fen is None
+                and self.cash_per_share_denominator is None
+                and self.cash_rounding is None
+            )
+            rational_amount = (
+                self.cash_per_share_fen is None
+                and self.cash_per_share_numerator_fen is not None
+                and self.cash_per_share_denominator is not None
+                and self.cash_rounding is not None
+            )
+            if (
+                self.entitled_shares is None
+                or not (legacy_amount or rational_amount)
+                or self.multiplier_numerator is not None
+                or self.multiplier_denominator is not None
+            ):
+                raise ValueError(
+                    "dividend_ex requires entitlement and one exact cash amount"
+                )
         if self.event == "dividend_pay" and any(
             item is not None
             for item in (
@@ -131,6 +162,9 @@ class QuantaxisBacktestEvent(_StrictModel):
                 self.multiplier_denominator,
                 self.entitled_shares,
                 self.cash_per_share_fen,
+                self.cash_per_share_numerator_fen,
+                self.cash_per_share_denominator,
+                self.cash_rounding,
             )
         ):
             raise ValueError("dividend_pay cannot contain accrual data")
@@ -573,13 +607,19 @@ class QuantaxisAdapter:
             elif event.event == "dividend_ex":
                 assert event.symbol is not None
                 assert event.entitled_shares is not None
-                assert event.cash_per_share_fen is not None
                 assert event.mark_prices_fen is not None
                 account.accrue_dividend(
                     trade_date=event.trade_date,
                     symbol=event.symbol,
                     entitled_shares=event.entitled_shares,
                     cash_per_share_fen=event.cash_per_share_fen,
+                    cash_per_share_numerator_fen=(
+                        event.cash_per_share_numerator_fen
+                    ),
+                    cash_per_share_denominator=(
+                        event.cash_per_share_denominator
+                    ),
+                    cash_rounding=event.cash_rounding,
                     mark_prices_fen=event.mark_prices_fen,
                 )
             else:
