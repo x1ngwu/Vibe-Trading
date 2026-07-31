@@ -355,7 +355,7 @@ def _confirmed_chain(
             timeout_seconds=30,
             max_stdout_bytes=2_000_000,
             max_stderr_bytes=1_000_000,
-            memory_bytes=268_435_456,
+            memory_bytes=1_073_741_824,
         ),
         random_seed=7,
         created_at=_T0,
@@ -438,13 +438,18 @@ def test_qe5_2_confirmed_plan_runs_worker_and_reconciles_daily_oracle(
     assert len(result.worker.engine_position_snapshots) == 4
     assert result.worker.signal_audit[0]["selected_symbols"] == ["600001.SH"]
     assert result.worker.signal_audit[2]["selected_symbols"] == ["000002.SZ"]
+    assert result.worker.signal_audit[0]["evaluated_symbol_count"] == 2
+    assert result.worker.signal_audit[0]["eligible_symbol_count"] == 1
+    assert result.worker.signal_audit[0]["rules_truncated"] is True
+    assert len(result.worker.signal_audit[0]["rule_outcomes_sha256"]) == 64
+    assert set(result.worker.signal_audit[0]["rules"]) == {"600001.SH"}
     assert any(entry.event == "dividend_ex" for entry in result.ledger.entries)
     assert any(entry.event == "dividend_pay" for entry in result.ledger.entries)
     assert result.ledger.entries[-1].positions == {"000002.SZ": 400}
     assert result.ledger.data_snapshot_sha256 == compute_snapshot_sha256(snapshot_path)
     assert runner.calls[0]["operation"] == "backtest"
     assert runner.calls[0]["timeout_seconds"] == 30
-    assert runner.calls[0]["memory_bytes"] == 268_435_456
+    assert runner.calls[0]["memory_bytes"] == 1_073_741_824
     assert runner.calls[0]["max_open_files"] == 256
     order_dates = [
         event.trade_date
@@ -881,7 +886,8 @@ def test_qe5_2_bar_known_after_trade_date_fails_point_in_time(
 def test_qe5_2_worker_capability_is_registered() -> None:
     worker_source = (WORKER_DIR / "worker.py").read_text(encoding="utf-8")
     assert '"backtest": "qe5"' in worker_source
-    assert '"backtest": build_backtest_handler(_load_quantaxis_boundary)' in worker_source
+    assert "_load_quantaxis_backtest_boundary" in worker_source
+    assert '"backtest": build_backtest_handler(' in worker_source
 
 
 @pytest.mark.integration
@@ -925,6 +931,13 @@ def test_qe5_2_real_pinned_quantaxis_worker_is_offline_and_replayable(
     )
 
     assert first.worker.engine_version == "2.1.0a2"
+    assert set(first.worker.source_sha256) == {
+        "data_fq",
+        "indicator_base",
+        "indicators",
+        "calendar",
+        "parameters",
+    }
     assert first.worker.source_sha256["indicators"] == (
         "94995068dbe73fdeddfea69bd51c0df52af6fc4567c5c432a265c2e3f9363ff5"
     )

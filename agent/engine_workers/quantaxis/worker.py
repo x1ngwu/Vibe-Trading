@@ -163,13 +163,29 @@ def _load_quantaxis_base_boundary() -> dict[str, Any]:
     }
 
 
-def _load_quantaxis_boundary() -> dict[str, Any]:
-    """Load the smallest useful QUANTAXIS leaves from the pinned distribution.
+def _load_quantaxis_backtest_boundary() -> dict[str, Any]:
+    """Load only the deterministic leaves used by the formal backtest.
 
-    QUANTAXIS's top-level package imports DB, Web and notebook stacks and starts
-    PyMongo helper threads during import. QE0 therefore proves a surgical
-    source-module boundary. No upstream source is copied or changed.
+    QIFI imports MongoDB and ClickHouse clients even for its nominally offline
+    account mode.  It was useful as a QE0 smoke candidate, but it is not an
+    independent accounting oracle and its state was never trusted by QE5.
+    The formal path therefore executes the audited indicator leaves while the
+    Vibe integer-fen ledger remains the execution/accounting authority.
+
+    Installation verification still covers the complete eight-file audited
+    closure, including QIFI, so a different or partially modified QUANTAXIS
+    wheel cannot be substituted silently. Provenance output remains limited to
+    the five leaves actually loaded by this operation.
     """
+
+    # _load_quantaxis_base_boundary verifies the complete eight-file closure
+    # before importing pandas/numpy. Do not rescan package metadata after those
+    # shared objects consume virtual address space under RLIMIT_AS.
+    return _load_quantaxis_base_boundary()
+
+
+def _load_quantaxis_boundary() -> dict[str, Any]:
+    """Load the broader audited boundary retained for the QE0 direct smoke."""
 
     root, installed_version, source_sha256 = _verify_installation()
 
@@ -201,11 +217,6 @@ def _load_quantaxis_boundary() -> dict[str, Any]:
     calendar = _load_source(
         "QUANTAXIS.QAUtil.QADate_trade", root / "QAUtil" / "QADate_trade.py"
     )
-
-    # QIFI's offline path still imports persistence modules at module load.
-    # Supply inert placeholders for those unreachable nodatabase=True paths,
-    # while loading the account, position and market preset implementations
-    # unchanged from the pinned distribution.
     market_preset = _load_source(
         "QUANTAXIS.QAMarket.market_preset", root / "QAMarket" / "market_preset.py"
     )
@@ -356,7 +367,9 @@ if __name__ == "__main__":
                 "capabilities": capabilities,
                 "direct_smoke": direct_smoke,
                 **build_formal_handlers(_load_quantaxis_base_boundary),
-                "backtest": build_backtest_handler(_load_quantaxis_boundary),
+                "backtest": build_backtest_handler(
+                    _load_quantaxis_backtest_boundary
+                ),
             },
         )
     )

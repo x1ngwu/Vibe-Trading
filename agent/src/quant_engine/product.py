@@ -305,7 +305,10 @@ class BacktestProductService:
             timeout_seconds=60,
             max_stdout_bytes=8_388_608,
             max_stderr_bytes=2_097_152,
-            memory_bytes=1_073_741_824,
+            # RLIMIT_AS bounds virtual address space, not resident memory.
+            # numpy/pandas shared objects need mapping headroom while PR-03
+            # independently gates measured peak RSS at 1 GiB.
+            memory_bytes=2_147_483_648,
         )
         self.random_seed = random_seed
 

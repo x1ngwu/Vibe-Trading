@@ -760,20 +760,12 @@ def _backtest(
         raise WorkerError("UNSUPPORTED_SEMANTICS", "A-share backtest must enforce T+1")
     try:
         engine = load_boundary()
-        qifi_account = engine["qifi"].QIFI_Account(
-            request["engine_request"]["request_id"],
-            "not-a-secret",
-            model="BACKTEST",
-            init_cash=request["initial_cash_fen"] / 100,
-            nodatabase=True,
-        )
-        qifi_account.create_backtestaccount()
     except WorkerError:
         raise
     except Exception as exc:
         raise WorkerError(
             "ENGINE_IMPORT_ERROR",
-            f"cannot initialize QUANTAXIS account: {type(exc).__name__}: {exc}",
+            f"cannot initialize QUANTAXIS factor boundary: {type(exc).__name__}: {exc}",
         ) from exc
 
     fee = data["rules"]["fee_schedule"]
@@ -1067,21 +1059,6 @@ def _backtest(
                     if blocked or filled == 0 or total > cash:
                         filled = 0
                     if filled:
-                        direction = engine["parameters"].ORDER_DIRECTION.BUY
-                        qifi_order = qifi_account.send_order(
-                            symbol.split(".", 1)[0],
-                            filled,
-                            price_fen / 100,
-                            direction,
-                            order_id=order["order_id"],
-                            datetime=f"{trade_date} 09:31:00",
-                        )
-                        if not qifi_order:
-                            raise WorkerError(
-                                "ENGINE_SEMANTIC_ERROR",
-                                "QUANTAXIS rejected an oracle-approved buy",
-                            )
-                        qifi_account.make_deal(qifi_order)
                         cash -= total
                         cumulative_purchase_notional_fen += filled * price_fen
                         lots[symbol].append([trade_date, filled])
@@ -1094,21 +1071,6 @@ def _backtest(
                     if blocked or requested_shares > sellable:
                         filled = 0
                     if filled:
-                        direction = engine["parameters"].ORDER_DIRECTION.SELL
-                        qifi_order = qifi_account.send_order(
-                            symbol.split(".", 1)[0],
-                            filled,
-                            price_fen / 100,
-                            direction,
-                            order_id=order["order_id"],
-                            datetime=f"{trade_date} 09:31:00",
-                        )
-                        if not qifi_order:
-                            raise WorkerError(
-                                "ENGINE_SEMANTIC_ERROR",
-                                "QUANTAXIS rejected an oracle-approved sell",
-                            )
-                        qifi_account.make_deal(qifi_order)
                         remaining = filled
                         next_lots = []
                         for acquired, quantity in lots[symbol]:
@@ -1296,12 +1258,21 @@ def _backtest(
                     "selected symbol has no next-open execution bar",
                 )
             pending_symbols = list(eligible)
+            audited_rules = {
+                symbol: audit_symbols[symbol]
+                for symbol in eligible
+                if symbol in audit_symbols
+            }
             signal_audit.append(
                 {
                     "trade_date": trade_date,
                     "execute_date": next_date,
                     "selected_symbols": eligible,
-                    "rules": audit_symbols,
+                    "evaluated_symbol_count": len(audit_symbols),
+                    "eligible_symbol_count": len(eligible),
+                    "rule_outcomes_sha256": _canonical_sha256(audit_symbols),
+                    "rules": audited_rules,
+                    "rules_truncated": len(audited_rules) < len(audit_symbols),
                 }
             )
     fee_result = {

@@ -36,6 +36,21 @@ COPY agent/requirements.txt agent/requirements.txt
 COPY requirements-lock.txt requirements-lock.txt
 RUN pip install --no-cache-dir --require-hashes -r requirements-lock.txt
 
+# QE5's formal QUANTAXIS boundary loads only audited leaf modules and reuses
+# the main image's pinned numpy/pandas runtime.  The deployment wrapper stages
+# this exact wheel from a protected host artifact after verifying its SHA-256;
+# it is deliberately absent from Git and installed without QUANTAXIS's broad
+# DB/Web/notebook dependency graph.
+COPY agent/engine_workers/quantaxis/dist/quantaxis-2.1.0a2-py3-none-any.whl \
+    /tmp/quantaxis-2.1.0a2-py3-none-any.whl
+RUN printf '%s  %s\n' \
+      '638672f9e479b4414ab42371e4ea9f39941ff77dbfb2c27549bb5790c2ca99a0' \
+      '/tmp/quantaxis-2.1.0a2-py3-none-any.whl' \
+      | sha256sum -c - \
+    && pip install --no-cache-dir --no-deps \
+      /tmp/quantaxis-2.1.0a2-py3-none-any.whl \
+    && rm -f /tmp/quantaxis-2.1.0a2-py3-none-any.whl
+
 # Copy project + install the CLI entrypoint (editable — the runtime stage
 # re-creates the same /app/agent source tree the .pth file points at).
 COPY pyproject.toml LICENSE README.md ./
@@ -57,7 +72,8 @@ LABEL org.opencontainers.image.title="Vibe-Trading" \
 WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    VIBE_QE0_QUANTAXIS_PYTHON=/opt/venv/bin/python
 
 # Runtime-only native libs. NO build-essential here — these are weasyprint's
 # shared libraries (Pango/HarfBuzz/Fontconfig/Cairo/gdk-pixbuf) per its official

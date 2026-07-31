@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from tests.test_qe5_backtest_run import _run_chain, _store_parents
@@ -16,7 +18,11 @@ from src.quant_engine import (
     BacktestProductService,
     BacktestRunStore,
     BacktestRuntime,
+    EngineIdentity,
+    QUANTAXIS_ENGINE_COMMIT,
     QuantaxisAdapter,
+    WorkerConfig,
+    WorkerRunner,
 )
 from src.quant_engine.product import persist_backtest_visualization
 from src.research.store import ResearchStore
@@ -74,6 +80,52 @@ def _service(tmp_path: Path):
         random_seed=compilation.plan.random_seed,
     )
     return service, prepared, version
+
+
+@pytest.mark.integration
+def test_qe5_6_real_worker_completes_persistent_product_chain(
+    tmp_path: Path,
+) -> None:
+    python_text = os.environ.get("VIBE_QE0_QUANTAXIS_PYTHON")
+    if not python_text:
+        pytest.skip("set VIBE_QE0_QUANTAXIS_PYTHON to run pinned QE5 product chain")
+    service, expected, version = _service(tmp_path)
+    agent_root = Path(__file__).resolve().parents[1]
+    service.adapter = QuantaxisAdapter(
+        WorkerRunner(
+            WorkerConfig(
+                engine=EngineIdentity("quantaxis", QUANTAXIS_ENGINE_COMMIT),
+                python=Path(python_text).absolute(),
+                script=(
+                    agent_root / "engine_workers" / "quantaxis" / "worker.py"
+                ).resolve(),
+                snapshot_root=service.snapshot_root.resolve(),
+            ),
+            common_runtime=(agent_root / "engine_workers" / "common").resolve(),
+        )
+    )
+    try:
+        submitted, _spec = service.submit(
+            session_id=version.stream_id,
+            strategy_version_id=version.version_id,
+            idempotency_key="real-product-chain-1",
+            initial_cash_fen=1_000_000,
+        )
+        completed = _wait(service, version.stream_id, submitted.job.job_id)
+
+        assert completed.status == "completed"
+        assert completed.run_id == expected.record.run_id
+        assert completed.snapshot_sha256 == expected.record.provenance.snapshot_sha256
+        assert completed.ledger_sha256 == expected.record.ledger_sha256
+        assert completed.engine_commit == QUANTAXIS_ENGINE_COMMIT
+        persisted = service.run_store.get(
+            completed.run_id,
+            owner_scope=version.owner_scope,
+        )
+        assert persisted is not None
+        assert persisted.record == expected.record
+    finally:
+        service.runtime.close()
 
 
 def test_qe5_5_agent_tool_is_strict_session_injected_and_not_live() -> None:
