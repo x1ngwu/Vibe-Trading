@@ -1,6 +1,22 @@
 import { parseVisualizationSpecs } from "../visualizations";
 
 describe("parseVisualizationSpecs", () => {
+  it("accepts a content-bound QE5 backtest result reference", () => {
+    const item = {
+      schema_version: 1,
+      type: "backtest_result",
+      visualization_id: "backtest_abc",
+      data_ref: "backtest_abc",
+      title: "策略 v2 回测",
+      stream_id: "session-backtest",
+      strategy_version_id: `strategy-version:${"1".repeat(64)}`,
+      strategy_version_number: 2,
+      job_id: `backtest-job:${"2".repeat(64)}`,
+      fallback_text: "回测状态不可用。",
+    };
+    expect(parseVisualizationSpecs([item])).toEqual([item]);
+    expect(parseVisualizationSpecs([{ ...item, stream_id: "other", data_ref: "forged" }])).toEqual([]);
+  });
   it("keeps supported, path-safe chart specs", () => {
     expect(parseVisualizationSpecs([{
       schema_version: 1,

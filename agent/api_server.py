@@ -171,6 +171,9 @@ async def _stop_scheduled_research_on_shutdown() -> None:
     """Stop the scheduled research executor on server shutdown."""
     await _stop_channel_runtime()
     await _stop_scheduled_research_executor()
+    from src.quant_engine.product import close_default_backtest_product_service
+
+    close_default_backtest_product_service()
 
 
 # ============================================================================
@@ -200,6 +203,10 @@ from src.api.sessions_routes import (  # noqa: F401, E402
 # --- Strategy confirmation ---
 from src.api.strategy_routes import register_strategy_routes  # noqa: E402
 register_strategy_routes(app)
+
+# --- Governed strategy backtests ---
+from src.api.backtest_routes import register_backtest_routes  # noqa: E402
+register_backtest_routes(app)
 
 # --- System ---
 from src.api.system_routes import register_system_routes  # noqa: E402

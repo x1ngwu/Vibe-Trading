@@ -3,6 +3,7 @@ import { AlertTriangle, BarChart3, Maximize2, RefreshCw, X } from "lucide-react"
 import { useTranslation } from "react-i18next";
 import { CandlestickChart, isIntradayTimeframe } from "@/components/charts/CandlestickChart";
 import { StrategyConfirmationCard } from "@/components/visualizations/StrategyConfirmationCard";
+import { BacktestResultCard } from "@/components/visualizations/BacktestResultCard";
 import { api, type RunVisualization, type SimilarityRunVisualization } from "@/lib/api";
 import { getChartTheme } from "@/lib/chart-theme";
 import { abbreviateNum } from "@/lib/formatters";
@@ -502,7 +503,8 @@ export function VisualizationRenderer({ runId, visualizations = [] }: RendererPr
   const charts = visualizations.filter((item) => item.type === "candlestick_volume");
   const rankings = visualizations.filter((item) => item.type === "similarity_ranking");
   const strategies = visualizations.filter((item) => item.type === "strategy_confirmation");
-  if (!runId || (charts.length === 0 && rankings.length === 0 && strategies.length === 0)) return null;
+  const backtests = visualizations.filter((item) => item.type === "backtest_result");
+  if (!runId || (charts.length === 0 && rankings.length === 0 && strategies.length === 0 && backtests.length === 0)) return null;
   const safeIndex = Math.min(activeIndex, Math.max(0, charts.length - 1));
 
   return (
@@ -544,6 +546,12 @@ export function VisualizationRenderer({ runId, visualizations = [] }: RendererPr
         <StrategyConfirmationCard
           key={`${runId}:${spec.visualization_id}`}
           runId={runId}
+          spec={spec}
+        />
+      ))}
+      {backtests.map((spec) => (
+        <BacktestResultCard
+          key={`${runId}:${spec.visualization_id}`}
           spec={spec}
         />
       ))}

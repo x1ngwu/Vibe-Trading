@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import i18n from "@/i18n";
-import type { EquityPoint } from "@/lib/api";
+import type { EquityPoint, TradeMarker } from "@/lib/api";
 import { getChartTheme } from "@/lib/chart-theme";
 import { abbreviateNum } from "@/lib/formatters";
 import { echarts, CHART_GROUP, connectCharts } from "@/lib/echarts";
@@ -8,10 +8,11 @@ import { useDarkMode } from "@/hooks/useDarkMode";
 
 interface Props {
   data: EquityPoint[];
+  trades?: TradeMarker[];
   height?: number;
 }
 
-export function EquityChart({ data, height = 300 }: Props) {
+export function EquityChart({ data, trades = [], height = 300 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const { dark } = useDarkMode();
 
@@ -26,6 +27,19 @@ export function EquityChart({ data, height = 300 }: Props) {
     const equity = data.map((d) => Number(d.equity));
     const drawdown = data.map((d) => (Number(d.drawdown) * 100).toFixed(2));
     const minDD = Math.min(...drawdown.map(Number));
+    const equityByDate = new Map(data.map((point) => [point.time, Number(point.equity)]));
+    const tradeMarks = trades
+      .filter((trade) => equityByDate.has(trade.time))
+      .slice(0, 200)
+      .map((trade) => ({
+        name: `${trade.side} ${trade.symbol}`,
+        coord: [trade.time, equityByDate.get(trade.time)],
+        value: `${trade.side} ${trade.qty ?? ""}`,
+        symbol: trade.side === "BUY" ? "triangle" : "pin",
+        symbolRotate: trade.side === "BUY" ? 0 : 180,
+        itemStyle: { color: trade.side === "BUY" ? t.upColor : t.downColor },
+        label: { show: false },
+      }));
 
     chart.setOption({
       backgroundColor: "transparent",
@@ -86,6 +100,9 @@ export function EquityChart({ data, height = 300 }: Props) {
           areaStyle: {
             color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: t.infoColor + "40" }, { offset: 1, color: t.infoColor + "00" }] },
           },
+          markPoint: tradeMarks.length
+            ? { symbolSize: 20, data: tradeMarks }
+            : undefined,
         },
         {
           name: "Drawdown%", type: "line", xAxisIndex: 1, yAxisIndex: 1,
@@ -104,7 +121,7 @@ export function EquityChart({ data, height = 300 }: Props) {
     const ro = new ResizeObserver(() => chart.resize());
     ro.observe(ref.current!);
     return () => { ro.disconnect(); chart.dispose(); };
-  }, [data, dark]);
+  }, [data, trades, dark]);
 
   if (data.length === 0) {
     return <div className="text-muted-foreground text-sm p-4">{i18n.t("charts.noEquityData")}</div>;

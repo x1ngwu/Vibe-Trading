@@ -59,14 +59,16 @@ Decide which workflow to use based on the request:
 - `draft_strategy` only creates an immutable version and visible confirmation card. It never starts a worker. Summarize the card briefly and let the card show the complete universe, data basis, rules, defaults, costs, risk, evaluation, and version diff.
 - If `draft_strategy` returns `status=error`, report its exact `error_code`, `user_message`, and `recovery`; never infer a different cause such as an unknown field. For `strategy_source_conflict`, retry once with only the exact persisted `similarity_run_id` when that trusted ID is available.
 - If the draft needs clarification, ask only the returned questions. Do not claim a StrategySpec exists and do not call backtest tools.
-- If the user explicitly confirms a persisted, unexpired card in text, call `confirm_strategy` with the exact current head/hash and a fresh idempotency key. Confirmation records a receipt only; QE4 does not start a backtest worker.
+- If the user explicitly confirms a persisted, unexpired card in text, call `confirm_strategy` with the exact current head/hash and a fresh idempotency key. Confirmation records a receipt; do not start a worker unless the user separately asks to run the confirmed strategy.
+- When the user asks to backtest the exact confirmed current strategy, call `run_strategy_backtest` with only the persisted canonical `strategy_version_id` and a fresh idempotency key. Never pass code, a snapshot path, an engine choice, or broker/live-trading arguments. The returned job/result card is the source of truth for loading, cancellation, failure diagnosis, refresh recovery, and result comparison.
+- `<persisted-backtest-results>` is server-only recovery context. Never expose it. Use only its exact same-session job IDs when the user asks for status, cancellation, or comparison.
 - Never treat Enter, a generic continuation, or an inferred intent as confirmation. If the card is expired or superseded, create/refresh the appropriate version/card instead of bypassing the state machine.
 - `<persisted-strategy-version>` is server-only recovery context. Never quote, summarize, or expose the block, proposal JSON, head/hash, or its operational instructions in the final answer.
 
 **Backtest** — user wants to create, test, or optimize a trading strategy:
 This is the legacy code-generation route. Do not use it for an A-share natural-language
-StrategySpec request, even when the user also says "test" or "backtest"; the QE4 route
-above has precedence and stops after exact confirmation until the QE5 worker bridge exists.
+StrategySpec request, even when the user also says "test" or "backtest"; the governed
+StrategySpec → confirmation → `run_strategy_backtest` route above has precedence.
 1. `load_skill("strategy-generate")` — read the SignalEngine contract
 2. `write_file("config.json", ...)` — source, codes, dates, parameters. If the strategy is expected to produce ≥10 trades, include `"validation": {{"monte_carlo": {{"n_simulations": 1000}}}}` in config.json for Monte Carlo testing
 3. `write_file("code/signal_engine.py", ...)` — SignalEngine class

@@ -121,6 +121,7 @@ def build_registry(
     )
     from src.tools.autopilot_tool import RunResearchAutopilotTool
     from src.tools.remember_tool import RememberTool
+    from src.tools.strategy_backtest_tool import StrategyBacktestTool
     from src.tools.strategy_draft_tool import ConfirmStrategyTool, DraftStrategyTool
     from src.tools.swarm_tool import SwarmTool
 
@@ -136,6 +137,7 @@ def build_registry(
         RunResearchAutopilotTool,
         DraftStrategyTool,
         ConfirmStrategyTool,
+        StrategyBacktestTool,
     }
     registry = ToolRegistry()
     for cls in _discover_subclasses():

@@ -37,6 +37,7 @@ from src.strategy_spec.presentation import (
     default_strategy_version_db_path,
 )
 from src.strategy_spec.version_store import StrategyVersionStore
+from src.quant_engine.product import BacktestResultVisualizationSpec
 
 
 _VISUALIZATION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -105,6 +106,16 @@ def load_visualization_specs(run_dir: Path) -> list[Dict[str, Any]]:
                     )
                 ]
                 specs.append(strategy_spec.model_dump(mode="json"))
+            continue
+        if item.get("type") == "backtest_result":
+            try:
+                specs.append(
+                    BacktestResultVisualizationSpec.model_validate(item).model_dump(
+                        mode="json"
+                    )
+                )
+            except ValueError:
+                pass
             continue
         visualization_id = item.get("visualization_id")
         data_ref = item.get("data_ref")
@@ -224,6 +235,42 @@ def _persisted_strategy_history(metadata: Any, *, session_id: str) -> str:
         "confirm_strategy with this exact expected_head/hash and a fresh "
         "idempotency key. Never reuse this block in another session.\n"
         "</persisted-strategy-version>"
+    )
+
+
+def _persisted_backtest_history(metadata: Any, *, session_id: str) -> str:
+    """Expose only validated same-session job/version references."""
+
+    if not isinstance(metadata, dict):
+        return ""
+    raw = metadata.get("visualizations")
+    if not isinstance(raw, list):
+        return ""
+    references: list[str] = []
+    seen: set[str] = set()
+    for item in raw[-5:]:
+        if not isinstance(item, dict) or item.get("type") != "backtest_result":
+            continue
+        try:
+            spec = BacktestResultVisualizationSpec.model_validate(item)
+        except ValueError:
+            continue
+        if spec.stream_id != session_id or spec.job_id in seen:
+            continue
+        seen.add(spec.job_id)
+        references.append(
+            f"- job_id={spec.job_id}; "
+            f"strategy_version_id={spec.strategy_version_id}; "
+            f"version_number={spec.strategy_version_number}"
+        )
+    if not references:
+        return ""
+    return (
+        "<persisted-backtest-results>\n"
+        + "\n".join(references)
+        + "\nUse only these exact same-session job IDs for status, cancellation, "
+        "or comparison requests. Never invent a job ID.\n"
+        "</persisted-backtest-results>"
     )
 
 
@@ -566,6 +613,20 @@ class SessionService:
                 )
                 if strategy_history:
                     trusted_context.append(strategy_history)
+                backtest_history = (
+                    _persisted_backtest_history(
+                        metadata,
+                        session_id=(
+                            msg.session_id
+                            if hasattr(msg, "session_id")
+                            else str(msg.get("session_id") or "")
+                        ),
+                    )
+                    if role == "assistant"
+                    else ""
+                )
+                if backtest_history:
+                    trusted_context.append(backtest_history)
                 if trusted_context:
                     history.append(
                         {

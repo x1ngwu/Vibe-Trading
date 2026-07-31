@@ -1,5 +1,6 @@
 import type {
   CandlestickVisualizationSpec,
+  BacktestResultVisualizationSpec,
   SimilarityChannelWeights,
   SimilarityRankingVisualizationSpec,
   StrategyConfirmationVisualizationSpec,
@@ -14,6 +15,7 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const STRATEGY_VERSION_ID = /^strategy-version:[0-9a-f]{64}$/;
 const STRATEGY_EVENT_ID = /^strategy-state:[0-9a-f]{64}$/;
 const STREAM_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const BACKTEST_JOB_ID = /^backtest-job:[0-9a-f]{64}$/;
 
 function isIsoDate(value: unknown): value is string {
   if (typeof value !== "string" || !ISO_DATE.test(value)) return false;
@@ -174,6 +176,42 @@ function parseStrategySpec(raw: Record<string, unknown>): StrategyConfirmationVi
   };
 }
 
+function parseBacktestSpec(raw: Record<string, unknown>): BacktestResultVisualizationSpec | null {
+  if (
+    raw.type !== "backtest_result"
+    || typeof raw.visualization_id !== "string"
+    || !SAFE_ID.test(raw.visualization_id)
+    || raw.data_ref !== raw.visualization_id
+    || typeof raw.title !== "string"
+    || !raw.title.trim()
+    || raw.title.length > 200
+    || typeof raw.stream_id !== "string"
+    || !STREAM_ID.test(raw.stream_id)
+    || typeof raw.strategy_version_id !== "string"
+    || !STRATEGY_VERSION_ID.test(raw.strategy_version_id)
+    || typeof raw.strategy_version_number !== "number"
+    || !Number.isInteger(raw.strategy_version_number)
+    || raw.strategy_version_number < 1
+    || typeof raw.job_id !== "string"
+    || !BACKTEST_JOB_ID.test(raw.job_id)
+    || typeof raw.fallback_text !== "string"
+    || !raw.fallback_text.trim()
+    || raw.fallback_text.length > 500
+  ) return null;
+  return {
+    schema_version: 1,
+    type: "backtest_result",
+    visualization_id: raw.visualization_id,
+    data_ref: raw.data_ref as string,
+    title: raw.title,
+    stream_id: raw.stream_id,
+    strategy_version_id: raw.strategy_version_id,
+    strategy_version_number: raw.strategy_version_number,
+    job_id: raw.job_id,
+    fallback_text: raw.fallback_text,
+  };
+}
+
 export function parseVisualizationSpecs(value: unknown): VisualizationSpec[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item): VisualizationSpec[] => {
@@ -184,7 +222,9 @@ export function parseVisualizationSpecs(value: unknown): VisualizationSpec[] {
       ? parseSimilaritySpec(raw)
       : raw.type === "strategy_confirmation"
         ? parseStrategySpec(raw)
-        : parseCandlestickSpec(raw);
+        : raw.type === "backtest_result"
+          ? parseBacktestSpec(raw)
+          : parseCandlestickSpec(raw);
     return spec ? [spec] : [];
   }).slice(0, 5);
 }

@@ -101,10 +101,24 @@ export interface StrategyConfirmationVisualizationSpec {
   fallback_text: string;
 }
 
+export interface BacktestResultVisualizationSpec {
+  schema_version: 1;
+  type: "backtest_result";
+  visualization_id: string;
+  data_ref: string;
+  title: string;
+  stream_id: string;
+  strategy_version_id: string;
+  strategy_version_number: number;
+  job_id: string;
+  fallback_text: string;
+}
+
 export type VisualizationSpec =
   | CandlestickVisualizationSpec
   | SimilarityRankingVisualizationSpec
-  | StrategyConfirmationVisualizationSpec;
+  | StrategyConfirmationVisualizationSpec
+  | BacktestResultVisualizationSpec;
 export interface AgentMessage {
   id: string;
   type: AgentMessageType;

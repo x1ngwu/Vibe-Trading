@@ -1,8 +1,4 @@
-"""Engine-neutral protocol, isolated adapters, and deterministic accounting.
-
-These primitives remain deliberately separate from Agent/API and deployment
-registration. Product execution is introduced only by the later QE5 slices.
-"""
+"""Engine-neutral execution, deterministic accounting, and QE5 product runtime."""
 
 from .protocol import (
     PROTOCOL_NAME,
@@ -80,6 +76,20 @@ from .quantaxis_adapter import (
     write_quantaxis_backtest_snapshot,
 )
 from .runner import RunResult, WorkerConfig, WorkerExecutionError, WorkerRunner, compute_snapshot_sha256
+from .product import (
+    BacktestComparisonPayload,
+    BacktestDiagnosticView,
+    BacktestEquityPoint,
+    BacktestMetricDelta,
+    BacktestProductError,
+    BacktestProductService,
+    BacktestResultPayload,
+    BacktestResultVisualizationSpec,
+    BacktestTradeMarker,
+    close_default_backtest_product_service,
+    default_backtest_product_service,
+    persist_backtest_visualization,
+)
 
 __all__ = [
     "PROTOCOL_NAME",
@@ -102,6 +112,15 @@ __all__ = [
     "BacktestRunProvenance",
     "BacktestRunQuotaExceeded",
     "BacktestRunStore",
+    "BacktestComparisonPayload",
+    "BacktestDiagnosticView",
+    "BacktestEquityPoint",
+    "BacktestMetricDelta",
+    "BacktestProductError",
+    "BacktestProductService",
+    "BacktestResultPayload",
+    "BacktestResultVisualizationSpec",
+    "BacktestTradeMarker",
     "BacktestRuntimeError",
     "BacktestSchedulerLeaseError",
     "BacktestSubmitResult",
@@ -147,7 +166,10 @@ __all__ = [
     "backup_backtest_runtime",
     "canonical_json",
     "compute_snapshot_sha256",
+    "close_default_backtest_product_service",
+    "default_backtest_product_service",
     "normalize_quantaxis_backtest_run",
+    "persist_backtest_visualization",
     "strict_json_loads",
     "validate_request",
     "validate_response",

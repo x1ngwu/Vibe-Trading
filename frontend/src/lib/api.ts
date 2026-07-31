@@ -109,6 +109,31 @@ export const api = {
       + `/strategy-confirmations/${encodeURIComponent(visualizationId)}/confirm`,
     { method: "POST", body: JSON.stringify(body) },
   ),
+  getBacktest: (sessionId: string, jobId: string, signal?: AbortSignal) =>
+    request<BacktestResultPayload>(
+      `/sessions/${encodeURIComponent(sessionId)}/backtests/${encodeURIComponent(jobId)}`,
+      { signal },
+    ),
+  listBacktests: (sessionId: string, limit = 100) =>
+    request<BacktestJobPayload[]>(
+      `/sessions/${encodeURIComponent(sessionId)}/backtests?limit=${encodeURIComponent(String(limit))}`,
+    ),
+  cancelBacktest: (sessionId: string, jobId: string) =>
+    request<BacktestJobPayload>(
+      `/sessions/${encodeURIComponent(sessionId)}/backtests/${encodeURIComponent(jobId)}/cancel`,
+      { method: "POST" },
+    ),
+  compareBacktests: (sessionId: string, leftJobId: string, rightJobId: string) =>
+    request<BacktestComparisonPayload>(
+      `/sessions/${encodeURIComponent(sessionId)}/backtests/compare`,
+      {
+        method: "POST",
+        body: JSON.stringify({ left_job_id: leftJobId, right_job_id: rightJobId }),
+      },
+    ),
+  backtestSseUrl: (sessionId: string, jobId: string) => withAuthTicket(
+    `${BASE}/sessions/${encodeURIComponent(sessionId)}/backtests/${encodeURIComponent(jobId)}/events`,
+  ),
   listSessions: () => request<SessionItem[]>("/sessions"),
   createSession: (title?: string) => request<SessionItem>("/sessions", { method: "POST", body: JSON.stringify({ title: title || "" }) }),
   deleteSession: (sid: string) => request<{ status: string }>(`/sessions/${sid}`, { method: "DELETE" }),
@@ -615,10 +640,83 @@ export type RunVisualization =
   | SimilarityRunVisualization
   | StrategyConfirmationRunVisualization;
 
+export type BacktestJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+
+export interface BacktestJobPayload {
+  job_id: string;
+  owner_scope: string;
+  idempotency_key: string;
+  request_sha256: string;
+  strategy_stream_id: string | null;
+  strategy_version_id: string | null;
+  status: BacktestJobStatus;
+  submitted_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  run_id: string | null;
+  diagnostic: { code: string; message: string; stderr: string } | null;
+  cancel_requested: boolean;
+  attempts: number;
+}
+
+export interface BacktestDiagnosticPayload {
+  code: string;
+  message: string;
+  trade_date: string | null;
+  kind: string | null;
+}
+
+export interface BacktestResultPayload {
+  schema_version: "vibe.backtest-product.v1";
+  visualization_id: string;
+  type: "backtest_result";
+  stream_id: string;
+  strategy_version_id: string;
+  strategy_version_number: number;
+  job_id: string;
+  status: BacktestJobStatus;
+  submitted_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  run_id: string | null;
+  metrics: {
+    total_return: number;
+    annualized_return: number | null;
+    max_drawdown: number;
+    turnover: number;
+    trade_count: number;
+  } | null;
+  equity: EquityPoint[];
+  trades: TradeMarker[];
+  diagnostics: BacktestDiagnosticPayload[];
+  snapshot_sha256: string | null;
+  ledger_sha256: string | null;
+  engine_commit: string | null;
+  truncated_equity: boolean;
+  truncated_trades: boolean;
+  truncated_diagnostics: boolean;
+}
+
+export interface BacktestComparisonPayload {
+  schema_version: "vibe.backtest-comparison.v1";
+  stream_id: string;
+  left_job_id: string;
+  right_job_id: string;
+  left_version_id: string;
+  right_version_id: string;
+  deltas: Array<{
+    metric: "total_return" | "annualized_return" | "max_drawdown" | "turnover" | "trade_count";
+    left: number | null;
+    right: number | null;
+    delta: number | null;
+  }>;
+}
+
 export interface TradeMarker {
   time: string;
   timestamp?: string;
   code?: string;
+  symbol?: string;
   side: "BUY" | "SELL";
   price: number;
   qty?: number;

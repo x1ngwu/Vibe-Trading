@@ -70,6 +70,14 @@ class BacktestJob(_StrictModel):
     owner_scope: str = Field(pattern=_OWNER_PATTERN)
     idempotency_key: str = Field(pattern=_IDEMPOTENCY_PATTERN)
     request_sha256: str = Field(pattern=_SHA256_PATTERN)
+    strategy_stream_id: str | None = Field(
+        default=None,
+        pattern=_IDEMPOTENCY_PATTERN,
+    )
+    strategy_version_id: str | None = Field(
+        default=None,
+        pattern=r"^strategy-version:[0-9a-f]{64}$",
+    )
     status: Literal["queued", "running", "completed", "failed", "cancelled"]
     submitted_at: AwareDatetime
     started_at: AwareDatetime | None = None
@@ -81,6 +89,8 @@ class BacktestJob(_StrictModel):
 
     @model_validator(mode="after")
     def validate_lifecycle(self) -> "BacktestJob":
+        if (self.strategy_stream_id is None) != (self.strategy_version_id is None):
+            raise ValueError("strategy stream and version identities must be paired")
         if self.status == "queued" and (
             self.started_at is not None
             or self.finished_at is not None
@@ -150,6 +160,8 @@ class BacktestJobStore:
         owner_scope: str,
         idempotency_key: str,
         request_sha256: str,
+        strategy_stream_id: str | None = None,
+        strategy_version_id: str | None = None,
         submitted_at: datetime | None = None,
     ) -> BacktestSubmitResult:
         if not re.fullmatch(_OWNER_PATTERN, owner_scope):
@@ -158,6 +170,18 @@ class BacktestJobStore:
             raise ValueError("idempotency_key is invalid")
         if not re.fullmatch(_SHA256_PATTERN, request_sha256):
             raise ValueError("request_sha256 is invalid")
+        if strategy_stream_id is not None and not re.fullmatch(
+            _IDEMPOTENCY_PATTERN,
+            strategy_stream_id,
+        ):
+            raise ValueError("strategy_stream_id is invalid")
+        if strategy_version_id is not None and not re.fullmatch(
+            r"^strategy-version:[0-9a-f]{64}$",
+            strategy_version_id,
+        ):
+            raise ValueError("strategy_version_id is invalid")
+        if (strategy_stream_id is None) != (strategy_version_id is None):
+            raise ValueError("strategy stream and version identities must be supplied together")
         identity = {
             "owner_scope": owner_scope,
             "idempotency_key": idempotency_key,
@@ -176,7 +200,11 @@ class BacktestJobStore:
                 ).fetchone()
                 if row is not None:
                     existing = self._row_to_job(row)
-                    if existing.request_sha256 != request_sha256:
+                    if (
+                        existing.request_sha256 != request_sha256
+                        or existing.strategy_stream_id != strategy_stream_id
+                        or existing.strategy_version_id != strategy_version_id
+                    ):
                         raise BacktestJobConflictError(
                             "idempotency key was used for another backtest request"
                         )
@@ -186,10 +214,11 @@ class BacktestJobStore:
                     """
                     INSERT INTO jobs(
                         job_id, owner_scope, idempotency_key, request_sha256,
+                        strategy_stream_id, strategy_version_id,
                         status, submitted_at, started_at, finished_at, run_id,
                         diagnostic_code, diagnostic_message, diagnostic_stderr,
                         cancel_requested, attempts
-                    ) VALUES (?, ?, ?, ?, 'queued', ?, NULL, NULL, NULL,
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, NULL, NULL, NULL,
                               NULL, NULL, NULL, 0, 0)
                     """,
                     (
@@ -197,6 +226,8 @@ class BacktestJobStore:
                         owner_scope,
                         idempotency_key,
                         request_sha256,
+                        strategy_stream_id,
+                        strategy_version_id,
                         timestamp.isoformat(),
                     ),
                 )
@@ -633,6 +664,8 @@ class BacktestJobStore:
                     owner_scope TEXT NOT NULL,
                     idempotency_key TEXT NOT NULL,
                     request_sha256 TEXT NOT NULL,
+                    strategy_stream_id TEXT,
+                    strategy_version_id TEXT,
                     status TEXT NOT NULL CHECK(
                         status IN ('queued', 'running', 'completed', 'failed', 'cancelled')
                     ),
@@ -651,6 +684,20 @@ class BacktestJobStore:
                     ON jobs(owner_scope, submitted_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_jobs_status_submitted
                     ON jobs(status, submitted_at ASC);
+                """
+            )
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
+            }
+            if "strategy_stream_id" not in columns:
+                connection.execute("ALTER TABLE jobs ADD COLUMN strategy_stream_id TEXT")
+            if "strategy_version_id" not in columns:
+                connection.execute("ALTER TABLE jobs ADD COLUMN strategy_version_id TEXT")
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_jobs_strategy_stream
+                ON jobs(owner_scope, strategy_stream_id, submitted_at DESC)
                 """
             )
             connection.commit()
@@ -737,6 +784,8 @@ class BacktestJobStore:
                 owner_scope=row["owner_scope"],
                 idempotency_key=row["idempotency_key"],
                 request_sha256=row["request_sha256"],
+                strategy_stream_id=row["strategy_stream_id"],
+                strategy_version_id=row["strategy_version_id"],
                 status=row["status"],
                 submitted_at=datetime.fromisoformat(row["submitted_at"]),
                 started_at=(
@@ -844,6 +893,8 @@ class BacktestRuntime:
         idempotency_key: str,
         request_sha256: str,
         execute: BacktestExecution,
+        strategy_stream_id: str | None = None,
+        strategy_version_id: str | None = None,
     ) -> BacktestSubmitResult:
         with self._submission_lock:
             if self._closed:
@@ -853,7 +904,11 @@ class BacktestRuntime:
                 idempotency_key=idempotency_key,
             )
             if existing is not None:
-                if existing.request_sha256 != request_sha256:
+                if (
+                    existing.request_sha256 != request_sha256
+                    or existing.strategy_stream_id != strategy_stream_id
+                    or existing.strategy_version_id != strategy_version_id
+                ):
                     raise BacktestJobConflictError(
                         "idempotency key was used for another backtest request"
                     )
@@ -864,6 +919,8 @@ class BacktestRuntime:
                 owner_scope=owner_scope,
                 idempotency_key=idempotency_key,
                 request_sha256=request_sha256,
+                strategy_stream_id=strategy_stream_id,
+                strategy_version_id=strategy_version_id,
             )
             task = _QueuedExecution(
                 job_id=submitted.job.job_id,
