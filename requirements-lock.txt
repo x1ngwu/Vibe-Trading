@@ -191,6 +191,10 @@ backports-tarfile==1.2.0 ; python_full_version < '3.12' \
     --hash=sha256:77e284d754527b01fb1e6fa8a1afe577858ebe4e9dad8919e34c862cb399bc34 \
     --hash=sha256:d75e02c268746e1b8144c278978b6e98e85de6ad16f8e4b0844a154557eca991
     # via jaraco-context
+baostock==0.9.3 \
+    --hash=sha256:16699d82d05037a8c133577fcdeb9ac0d5a7f31edc2432c4e883004e0a95e3f7 \
+    --hash=sha256:acbd19403285bc4e254cee8297cf0e2646ae2276e5af7e549deed3988ab02293
+    # via -r agent/requirements.txt
 beartype==0.22.9 \
     --hash=sha256:8f82b54aa723a2848a56008d18875f91c1db02c32ef6a62319a002e3e25a975f \
     --hash=sha256:d16c9bbc61ea14637596c5f6fbff2ee99cbe3573e46a716401734ef50c3060c2
@@ -2409,6 +2413,7 @@ pandas==2.3.3 \
     # via
     #   -r agent/requirements.txt
     #   akshare
+    #   baostock
     #   smartmoneyconcepts
     #   tushare
     #   yfinance

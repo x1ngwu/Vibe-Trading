@@ -25,6 +25,7 @@ from src.research.contracts import DataSnapshotRef, ResearchSpec
 from src.research.store import ResearchStore
 
 AGENT_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = AGENT_ROOT.parent
 WORKER_DIR = AGENT_ROOT / "engine_workers" / "quantaxis"
 COMMON_DIR = AGENT_ROOT / "engine_workers" / "common"
 for _path in (str(COMMON_DIR), str(WORKER_DIR)):
@@ -45,6 +46,13 @@ OPEN_DATES = (
     "2025-06-04",
     "2025-06-05",
 )
+
+
+def test_production_lock_installs_baostock_materializer_dependency() -> None:
+    lock_text = (REPOSITORY_ROOT / "requirements-lock.txt").read_text(
+        encoding="utf-8"
+    )
+    assert "\nbaostock==0.9.3 \\" in lock_text
 
 
 class _Result:
