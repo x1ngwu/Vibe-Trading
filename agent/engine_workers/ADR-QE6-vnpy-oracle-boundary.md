@@ -47,6 +47,11 @@ the following before promotion:
 4. an `OracleReplayAudit` result of `matched`, `diverged`, `blocked`, or
    `not_available`.
 
+The source closure covers both the imported vn.py package files and the local
+oracle implementation (`worker.py`, all three replay handlers, and the shared
+worker runtime). A change to either side is release drift and requires a new
+audited closure before replay evidence can validate a strategy.
+
 A worker release mismatch and any old-run lineage mismatch are blocked. An
 upgrade does not replace the prior environment until historical fixtures match.
 A rollback uses the same audit path and exact prior release; it is not a mutable

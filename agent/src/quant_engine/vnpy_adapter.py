@@ -49,6 +49,11 @@ VNPY_SOURCE_SHA256 = {
     "trader_locale_init": "3138d59a9d7bf99cdcc683778e402f0dd7fabcf9698c3ec2820e44508ac0661c",
     "trader_object": "bd360fc224ce22a3f7521bef67ea61125d43c410fa880b9667030ee254546a69",
     "trader_constant": "1361eb485eda9fd97bee3e68324d9b08a96fe927c37a99f8b74de981141e7a0f",
+    "oracle_worker": "efeaf1f36d802160f7475f8b2540dc6ff150538a2d5eea3159cb90c91b98fc3d",
+    "oracle_event_path": "a6301f4d1acc34305faa2d92f49891272e436e5f5a938066dc9253acbd8b006a",
+    "oracle_ordinary_replay": "ec03ae16ccfccb35eb7bd8963af7ee99f823852a4537827378fe132c0553ad8c",
+    "oracle_china_a_replay": "cb91a9ace7acd763ddc2cee6fcbe82d3e5d55c23aec29ecd441876d6f2dd04e9",
+    "oracle_worker_runtime": "daaf282f6b66d21f0a1e2142c4db1b84ed5f1527d859f144c7e3558b294b0619",
 }
 
 

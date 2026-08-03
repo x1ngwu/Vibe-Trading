@@ -300,7 +300,16 @@ def test_capabilities_advertise_operations_only_after_provenance_passes(
         )
         result = worker.capabilities({}, None)
         assert result["engine_version"] == worker.EXPECTED_ENGINE_VERSION
-        assert result["source_sha256"] == worker.EXPECTED_SOURCE_SHA256
+        if engine == "vnpy":
+            assert {
+                name: result["source_sha256"][name]
+                for name in worker.EXPECTED_SOURCE_SHA256
+            } == worker.EXPECTED_SOURCE_SHA256
+            assert set(result["source_sha256"]) == (
+                set(worker.EXPECTED_SOURCE_SHA256) | set(worker.LOCAL_SOURCE_PATHS)
+            )
+        else:
+            assert result["source_sha256"] == worker.EXPECTED_SOURCE_SHA256
         assert result["operations"]["direct_smoke"] == "poc"
         if engine == "quantaxis":
             assert result["operations"]["adjust_prices"] == "qe2"

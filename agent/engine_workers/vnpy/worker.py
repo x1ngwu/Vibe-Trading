@@ -42,10 +42,17 @@ SOURCE_RELATIVE_PATHS = {
     "trader_object": ("trader", "object.py"),
     "trader_constant": ("trader", "constant.py"),
 }
+LOCAL_SOURCE_PATHS = {
+    "oracle_worker": ("worker.py",),
+    "oracle_event_path": ("formal_event_path.py",),
+    "oracle_ordinary_replay": ("ordinary_replay.py",),
+    "oracle_china_a_replay": ("china_a_replay.py",),
+    "oracle_worker_runtime": ("..", "common", "worker_runtime.py"),
+}
 
 
 def _verify_installation() -> tuple[str, dict[str, str]]:
-    """Require the exact package version and every imported upstream source file."""
+    """Require the exact upstream install and report the complete oracle closure."""
 
     try:
         dist = distribution("vnpy")
@@ -84,7 +91,27 @@ def _verify_installation() -> tuple[str, dict[str, str]]:
             "ENGINE_PROVENANCE_MISMATCH",
             "installed vn.py source does not match the audited commit",
         )
-    return installed_version, actual
+    try:
+        local_root = Path(__file__).absolute().parent
+        local_files = {
+            name: local_root.joinpath(*relative)
+            for name, relative in LOCAL_SOURCE_PATHS.items()
+        }
+        if any(
+            path.is_symlink() or not path.is_file()
+            for path in local_files.values()
+        ):
+            raise OSError("oracle source is missing or is a symlink")
+        local_actual = {
+            name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for name, path in local_files.items()
+        }
+    except OSError as exc:
+        raise WorkerError(
+            "ENGINE_PROVENANCE_MISMATCH",
+            "local vn.py oracle source closure is incomplete",
+        ) from exc
+    return installed_version, {**actual, **local_actual}
 
 
 def capabilities(payload: Mapping[str, Any], snapshot: Mapping[str, Any] | None) -> Mapping[str, Any]:

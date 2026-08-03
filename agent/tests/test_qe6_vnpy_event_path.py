@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import date, datetime, timezone
+import hashlib
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -87,6 +88,23 @@ def _boundary() -> Mapping[str, Any]:
         "source_sha256": VNPY_SOURCE_SHA256,
         "Event": _FakeEvent,
         "EventEngine": _FakeEventEngine,
+    }
+
+
+def test_qe6_vnpy_provenance_binds_local_oracle_source_closure() -> None:
+    local_sources = {
+        "oracle_worker": WORKER_DIR / "worker.py",
+        "oracle_event_path": WORKER_DIR / "formal_event_path.py",
+        "oracle_ordinary_replay": WORKER_DIR / "ordinary_replay.py",
+        "oracle_china_a_replay": WORKER_DIR / "china_a_replay.py",
+        "oracle_worker_runtime": COMMON_DIR / "worker_runtime.py",
+    }
+    assert {
+        name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for name, path in local_sources.items()
+    } == {
+        name: VNPY_SOURCE_SHA256[name]
+        for name in local_sources
     }
 
 
