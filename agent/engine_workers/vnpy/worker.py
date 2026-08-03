@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 
 from worker_runtime import WorkerError, run_worker  # noqa: E402
 from formal_event_path import build_event_replay_handler  # noqa: E402
+from ordinary_replay import build_ordinary_replay_handler  # noqa: E402
 
 
 ENGINE_NAME = "vnpy"
@@ -96,7 +97,8 @@ def capabilities(payload: Mapping[str, Any], snapshot: Mapping[str, Any] | None)
             "security_probe": "poc",
             "direct_smoke": "poc",
             "event_replay": "qe6_1",
-            "normalize_ledger": "not_available_until_qe6_2",
+            "ordinary_replay": "qe6_2",
+            "normalize_ledger": "qe6_2_ordinary_only",
             "backtest": "not_available",
         },
         "protocol": {"name": "vibe.quant-engine.jsonl", "schema_version": "1.0"},
@@ -109,6 +111,8 @@ def _load_vnpy_event_boundary() -> Mapping[str, Any]:
     installed_version, source_sha256 = _verify_installation()
     try:
         from vnpy.event import Event, EventEngine
+        from vnpy.trader.constant import Direction, Exchange, Status
+        from vnpy.trader.object import OrderData, TradeData
     except Exception as exc:
         raise WorkerError(
             "ENGINE_IMPORT_ERROR",
@@ -119,6 +123,11 @@ def _load_vnpy_event_boundary() -> Mapping[str, Any]:
         "source_sha256": source_sha256,
         "Event": Event,
         "EventEngine": EventEngine,
+        "Direction": Direction,
+        "Exchange": Exchange,
+        "Status": Status,
+        "OrderData": OrderData,
+        "TradeData": TradeData,
     }
 
 
@@ -222,6 +231,9 @@ if __name__ == "__main__":
                 "capabilities": capabilities,
                 "direct_smoke": direct_smoke,
                 "event_replay": build_event_replay_handler(
+                    _load_vnpy_event_boundary
+                ),
+                "ordinary_replay": build_ordinary_replay_handler(
                     _load_vnpy_event_boundary
                 ),
             },

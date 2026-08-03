@@ -159,7 +159,7 @@ def _load_snapshot(snapshot: Mapping[str, Any] | None) -> Mapping[str, Any]:
     return root
 
 
-def _parse_payload(
+def parse_qe5_identity_payload(
     payload: Mapping[str, Any],
     *,
     snapshot: Mapping[str, Any] | None,
@@ -308,7 +308,7 @@ def _event_replay(
     snapshot: Mapping[str, Any] | None,
     load_boundary: Callable[[], Mapping[str, Any]],
 ) -> Mapping[str, Any]:
-    parsed = _parse_payload(payload, snapshot=snapshot)
+    parsed = parse_qe5_identity_payload(payload, snapshot=snapshot)
     try:
         boundary = load_boundary()
         event_type = boundary["Event"]

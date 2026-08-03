@@ -118,6 +118,7 @@ def _compilation(
     *,
     engine_name: str = "quantaxis",
     engine_commit: str = QUANTAXIS_ENGINE_COMMIT,
+    costs: CostSpec | None = None,
 ):
     snapshot_path = tmp_path / f"snapshot-{engine_name}.json"
     snapshot_sha256 = write_quantaxis_backtest_snapshot(
@@ -161,7 +162,8 @@ def _compilation(
             max_positions=1,
             max_position_weight=0.99,
             cash_buffer_weight=0.01,
-            costs=CostSpec(
+            costs=costs
+            or CostSpec(
                 commission_bps=3.0,
                 minimum_commission=5.0,
                 sell_tax_bps=5.0,
