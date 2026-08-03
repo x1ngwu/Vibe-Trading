@@ -52,7 +52,7 @@ class ReconciliationIntegrityError(ReconciliationError):
 
 
 class _StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
 class ReconciliationEngineIdentity(_StrictModel):
@@ -365,15 +365,13 @@ def create_reconciliation_artifact(
         "qe5_backtest_input_sha256": qe5_backtest_input_sha256,
         "qe5_ledger_sha256": qe5_ledger_sha256,
         "vnpy_replay_input_sha256": vnpy_replay_input_sha256,
-        "qe5_engine": qe5_engine.model_dump(mode="json"),
-        "vnpy_engine": vnpy_engine.model_dump(mode="json"),
-        "checkpoints": [item.model_dump(mode="json") for item in normalized],
+        "qe5_engine": qe5_engine,
+        "vnpy_engine": vnpy_engine,
+        "checkpoints": normalized,
         "comparison_sha256": comparison_sha256,
         "comparison_status": "diverged" if first_divergence is not None else "matched",
         "compared_entries": len(normalized),
-        "first_divergence": (
-            first_divergence.model_dump(mode="json") if first_divergence is not None else None
-        ),
+        "first_divergence": first_divergence,
     }
     digest = canonical_sha256(material)
     return ReconciliationArtifact(

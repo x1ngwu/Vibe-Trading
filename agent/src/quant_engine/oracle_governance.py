@@ -27,7 +27,7 @@ _AUDIT_ID_PATTERN = r"^oracle-replay-audit:[0-9a-f]{64}$"
 
 
 class _StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
 class HistoricalRunIdentity(_StrictModel):

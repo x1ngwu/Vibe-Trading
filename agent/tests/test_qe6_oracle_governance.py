@@ -5,6 +5,9 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from src.quant_engine import (
     VNPY_ENGINE_COMMIT,
     VNPY_ENGINE_VERSION,
@@ -210,3 +213,23 @@ def test_qe6_5_governance_store_persists_evidence_closure(tmp_path: Path) -> Non
         record=prepared.record,
     ) == audit
     assert store.get_audit(audit.audit_id, owner_scope="household:other") is None
+
+
+def test_qe6_5_governance_evidence_rejects_python_datetime_strings(
+    tmp_path: Path,
+) -> None:
+    prepared, *_ = _run_chain(tmp_path / "fixture")
+    current = _vnpy_current()
+    audit = audit_oracle_replay(
+        prepared.record,
+        mode="historical_replay",
+        expected_oracle=current,
+        observed_oracle=current,
+        reconciliation=_artifact(prepared.record, current),
+        created_at=NOW,
+    )
+    payload = audit.model_dump(mode="python")
+    payload["created_at"] = NOW.isoformat()
+
+    with pytest.raises(ValidationError, match="created_at"):
+        type(audit).model_validate(payload)
