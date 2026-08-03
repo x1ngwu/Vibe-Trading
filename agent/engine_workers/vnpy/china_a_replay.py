@@ -18,16 +18,6 @@ _TOP_KEYS = {
     "schema_version", "identity", "qe5_backtest_input_sha256",
     "qe5_ledger_sha256", "ledger", "events",
 }
-_PROJECTION_KEYS = {
-    "sequence", "trade_date", "event", "outcome", "reason", "order_id",
-    "symbol", "side", "requested_shares", "filled_shares", "price_fen",
-    "position_delta", "cash_delta_fen", "dividend_receivable_delta_fen",
-    "fees", "positions", "sellable_positions", "cash_fen",
-    "dividend_receivable_fen", "mark_prices_fen", "market_value_fen",
-    "equity_fen",
-}
-
-
 def _sha(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode()).hexdigest()
 
@@ -176,7 +166,16 @@ class _Account:
         kind = event["event"]
         day = date.fromisoformat(event["trade_date"])
         symbol = event["symbol"]
-        self.marks = dict(event["mark_prices_fen"])
+        marks = dict(event["mark_prices_fen"])
+        if set(marks) != set(self.positions()) or any(
+            isinstance(price, bool) or not isinstance(price, int) or price <= 0
+            for price in marks.values()
+        ):
+            raise WorkerError(
+                "CHINA_A_REPLAY_DIVERGENCE",
+                "marks do not cover positions",
+            )
+        self.marks = marks
         delta: dict[str, int] = {}
         cash_delta = 0
         recv_delta = 0
@@ -207,7 +206,7 @@ class _Account:
         return self.projection({
             "sequence": sequence, "trade_date": day.isoformat(), "event": kind, "outcome": "applied", "reason": None,
             "order_id": None, "symbol": symbol, "side": None, "requested_shares": 0, "filled_shares": 0,
-            "price_fen": self.marks[symbol], "position_delta": delta, "cash_delta_fen": cash_delta,
+            "price_fen": self.marks.get(symbol), "position_delta": delta, "cash_delta_fen": cash_delta,
             "dividend_receivable_delta_fen": recv_delta,
             "fees": {"commission_fen": 0, "sell_tax_fen": 0, "transfer_fee_fen": 0, "total_fen": 0},
         }, day)
@@ -238,6 +237,7 @@ def build_china_a_replay_handler(load_boundary: Callable[[], Mapping[str, Any]])
         Event, EventEngine = boundary["Event"], boundary["EventEngine"]
         account = _Account(entries[0], ledger["rules"], int(ledger["board_lot"]))
         receipts = []
+        actual_entries = []
         completed = ThreadEvent()
         failure: list[str] = []
 
@@ -250,11 +250,8 @@ def build_china_a_replay_handler(load_boundary: Callable[[], Mapping[str, Any]])
                     actual = account.mark(index + 1, raw)
                 else:
                     actual = account.action(index + 1, raw)
-                expected = {key: entries[index + 1][key] for key in _PROJECTION_KEYS}
-                if canonical_json(actual) != canonical_json(expected):
-                    failure.append(f"sequence {index + 1}")
-                else:
-                    receipts.append({"sequence": index + 1, "event": actual["event"]})
+                actual_entries.append(actual)
+                receipts.append({"sequence": index + 1, "event": actual["event"]})
             except Exception as exc:
                 failure.append(f"sequence {index + 1}: {type(exc).__name__}: {exc}")
             finally:
@@ -279,6 +276,7 @@ def build_china_a_replay_handler(load_boundary: Callable[[], Mapping[str, Any]])
             "execution_plan_sha256": identity["execution_plan_sha256"],
             "qe5_backtest_input_sha256": request["qe5_backtest_input_sha256"], "qe5_ledger_sha256": request["qe5_ledger_sha256"],
             "china_a_replay_input_sha256": _sha(request), "reconciled_entries": len(receipts), "receipts": receipts,
+            "entries": actual_entries,
             "engine_version": boundary["version"], "source_sha256": boundary["source_sha256"],
         }
     return replay

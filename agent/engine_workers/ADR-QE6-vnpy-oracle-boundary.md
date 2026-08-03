@@ -26,6 +26,14 @@ QUANTAXIS remains the product backtest engine. vn.py provides an independent
 second implementation and cannot overrule a first divergence by voting or by
 similar final returns.
 
+`ReconciliationArtifact` v2 retains the complete ordered checkpoint evidence,
+not only a comparison digest. Its validator recomputes the checkpoint digest,
+entry count, match/divergence status, and first divergence. The ordinary and
+China-A adapter paths require an immutable historical BacktestRun identity and
+an evidence store; every completed replay persists both the artifact and its
+derived validation decision. Operational or provenance failures still fail
+closed before producing comparison evidence.
+
 ## Release and replay policy
 
 Every vn.py release change must use an isolated environment and record all of

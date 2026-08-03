@@ -17,6 +17,7 @@ from src.quant_engine import (
     CnEquityFeeSchedule,
     CnEquityOrder,
     EngineIdentity,
+    HistoricalRunIdentity,
     QUANTAXIS_ENGINE_VERSION,
     QUANTAXIS_SOURCE_SHA256,
     QuantaxisBacktestEvent,
@@ -25,6 +26,8 @@ from src.quant_engine import (
     QuantaxisPositionSnapshot,
     QuantaxisRiskAudit,
     QuantaxisRiskPolicy,
+    ReconciliationEngineIdentity,
+    ReconciliationStore,
     VNPY_ENGINE_COMMIT,
     VNPY_ENGINE_VERSION,
     VNPY_SOURCE_SHA256,
@@ -67,6 +70,34 @@ _ZERO_FEES = CnEquityFeeSchedule(
     transfer_fee_tenths_bps=0,
     rule_version="qe6-ordinary-zero-v1",
 )
+
+
+def _historical_run(compilation: Any, qe5: QuantaxisBacktestResult) -> HistoricalRunIdentity:
+    return HistoricalRunIdentity(
+        run_id=f"backtest-record:{'a' * 64}",
+        run_content_sha256="a" * 64,
+        owner_scope=compilation.engine_request.owner_scope,
+        strategy_stream_id="strategy:qe6-test",
+        strategy_version_id=f"strategy-version:{'b' * 64}",
+        engine_request_sha256=compilation.engine_request.content_sha256,
+        execution_plan_sha256=compilation.plan.content_sha256,
+        snapshot_sha256=qe5.worker.snapshot_sha256,
+        backtest_input_sha256=qe5.worker.backtest_input_sha256,
+        ledger_sha256=qe5.ledger.content_sha256,
+        original_engine=ReconciliationEngineIdentity(
+            name="quantaxis",
+            version=qe5.worker.engine_version,
+            commit=compilation.engine_request.payload.engine.commit,
+            source_sha256=qe5.worker.source_sha256,
+        ),
+    )
+
+
+def _evidence(tmp_path: Path, compilation: Any, qe5: QuantaxisBacktestResult) -> dict[str, Any]:
+    return {
+        "historical_run": _historical_run(compilation, qe5),
+        "evidence_store": ReconciliationStore(tmp_path / "reconciliation"),
+    }
 
 
 class _Direction(Enum):
@@ -283,6 +314,7 @@ def test_qe6_2_reconciles_orders_fills_rejections_and_daily_account(
         snapshot=snapshot,
         snapshot_path=snapshot_path,
         qe5=qe5,
+        **_evidence(tmp_path, compilation, qe5),
     )
 
     assert [item.status for item in replay.worker.orders] == [
@@ -296,6 +328,17 @@ def test_qe6_2_reconciles_orders_fills_rejections_and_daily_account(
     assert replay.worker.daily_accounts[-1].cash_fen == 94_800
     assert replay.worker.daily_accounts[-1].equity_fen == 102_000
     assert runner.calls[0]["operation"] == "ordinary_replay"
+    assert replay.artifact.comparison_status == "matched"
+    assert replay.decision.status == "validated"
+    reopened = ReconciliationStore(tmp_path / "reconciliation")
+    assert reopened.get_artifact(
+        replay.artifact.artifact_id,
+        owner_scope=replay.artifact.owner_scope,
+    ) == replay.artifact
+    assert reopened.get_decision(
+        replay.decision.decision_id,
+        owner_scope=replay.decision.owner_scope,
+    ) == replay.decision
 
 
 def test_qe6_2_fails_on_first_ordinary_account_divergence(tmp_path: Path) -> None:
@@ -309,15 +352,19 @@ def test_qe6_2_fails_on_first_ordinary_account_divergence(tmp_path: Path) -> Non
         result["daily_accounts"][-1]["cash_fen"] += 1
         result["daily_accounts"][-1]["equity_fen"] += 1
 
-    with pytest.raises(ValueError, match="ordinary ledger diverged"):
-        VnpyOracleAdapter(  # type: ignore[arg-type]
-            _FakeRunner(mutate_result=mutate)
-        ).reconcile_ordinary(
-            compilation=compilation,
-            snapshot=snapshot,
-            snapshot_path=snapshot_path,
-            qe5=qe5,
-        )
+    replay = VnpyOracleAdapter(  # type: ignore[arg-type]
+        _FakeRunner(mutate_result=mutate)
+    ).reconcile_ordinary(
+        compilation=compilation,
+        snapshot=snapshot,
+        snapshot_path=snapshot_path,
+        qe5=qe5,
+        **_evidence(tmp_path, compilation, qe5),
+    )
+    assert replay.artifact.comparison_status == "diverged"
+    assert replay.artifact.first_divergence is not None
+    assert replay.artifact.first_divergence.sequence == 5
+    assert replay.decision.status == "blocked"
 
 
 def test_qe6_2_rejects_changed_fill_sequence_even_when_final_state_matches(
@@ -332,15 +379,19 @@ def test_qe6_2_rejects_changed_fill_sequence_even_when_final_state_matches(
     def mutate(result: dict[str, Any]) -> None:
         result["fills"].reverse()
 
-    with pytest.raises(ValueError, match="ordinary ledger diverged"):
-        VnpyOracleAdapter(  # type: ignore[arg-type]
-            _FakeRunner(mutate_result=mutate)
-        ).reconcile_ordinary(
-            compilation=compilation,
-            snapshot=snapshot,
-            snapshot_path=snapshot_path,
-            qe5=qe5,
-        )
+    replay = VnpyOracleAdapter(  # type: ignore[arg-type]
+        _FakeRunner(mutate_result=mutate)
+    ).reconcile_ordinary(
+        compilation=compilation,
+        snapshot=snapshot,
+        snapshot_path=snapshot_path,
+        qe5=qe5,
+        **_evidence(tmp_path, compilation, qe5),
+    )
+    assert replay.artifact.comparison_status == "diverged"
+    assert replay.artifact.first_divergence is not None
+    assert replay.artifact.first_divergence.sequence == 1
+    assert replay.decision.status == "blocked"
 
 
 def test_qe6_2_rejects_fees_outside_ordinary_scope(tmp_path: Path) -> None:
@@ -353,6 +404,7 @@ def test_qe6_2_rejects_fees_outside_ordinary_scope(tmp_path: Path) -> None:
             snapshot=snapshot,
             snapshot_path=snapshot_path,
             qe5=qe5,
+            **_evidence(tmp_path, compilation, qe5),
         )
 
 
@@ -381,8 +433,10 @@ def test_qe6_2_real_pinned_vnpy_ordinary_replay(tmp_path: Path) -> None:
         snapshot=snapshot,
         snapshot_path=snapshot_path,
         qe5=qe5,
+        **_evidence(tmp_path, compilation, qe5),
     )
 
     assert replay.worker.engine_version == VNPY_ENGINE_VERSION
     assert replay.worker.source_sha256 == VNPY_SOURCE_SHA256
     assert replay.worker.daily_accounts[-1].equity_fen == 102_000
+    assert replay.decision.status == "validated"

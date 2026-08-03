@@ -17,11 +17,24 @@ from src.research.contracts import (
 )
 from src.strategy_spec.compiler import StrategyCompilation
 
+from .cn_equity_accounting import CnEquityLedgerEntry
+from .oracle_governance import HistoricalRunIdentity
 from .quantaxis_adapter import (
     QUANTAXIS_ENGINE_COMMIT,
     QUANTAXIS_ENGINE_VERSION,
     QUANTAXIS_SOURCE_SHA256,
     QuantaxisBacktestResult,
+)
+from .reconciliation import (
+    ReconciliationAccountState,
+    ReconciliationArtifact,
+    ReconciliationCheckpoint,
+    ReconciliationEngineIdentity,
+    ReconciliationObservation,
+    ReconciliationStore,
+    StrategyValidationDecision,
+    create_reconciliation_artifact,
+    decide_strategy_validation,
 )
 from .runner import RunResult, WorkerRunner, compute_snapshot_sha256
 
@@ -190,17 +203,29 @@ class VnpyChinaAReplayResult(_StrictModel):
     china_a_replay_input_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     reconciled_entries: int = Field(ge=1)
     receipts: tuple[VnpyChinaAReceipt, ...]
+    entries: tuple[CnEquityLedgerEntry, ...]
     engine_version: str
     source_sha256: dict[str, str]
 
     @model_validator(mode="after")
     def validate_receipts(self) -> "VnpyChinaAReplayResult":
-        if self.reconciled_entries != len(self.receipts):
+        if self.reconciled_entries != len(self.receipts) or self.reconciled_entries != len(
+            self.entries
+        ):
             raise ValueError("China-A receipt count mismatch")
         if tuple(item.sequence for item in self.receipts) != tuple(
             range(1, len(self.receipts) + 1)
         ):
             raise ValueError("China-A receipts are incomplete or unordered")
+        if tuple(item.sequence for item in self.entries) != tuple(
+            range(1, len(self.entries) + 1)
+        ):
+            raise ValueError("China-A entries are incomplete or unordered")
+        if any(
+            receipt.event != entry.event
+            for receipt, entry in zip(self.receipts, self.entries)
+        ):
+            raise ValueError("China-A receipts do not match replay entries")
         return self
 
 
@@ -218,12 +243,356 @@ class VnpyOrdinaryReplay:
 
     worker: VnpyOrdinaryReplayResult
     qe5: QuantaxisBacktestResult
+    artifact: ReconciliationArtifact
+    decision: StrategyValidationDecision
 
 
 @dataclass(frozen=True)
 class VnpyChinaAReplay:
     worker: VnpyChinaAReplayResult
     qe5: QuantaxisBacktestResult
+    artifact: ReconciliationArtifact
+    decision: StrategyValidationDecision
+
+
+def _account_observation(
+    *,
+    cash_fen: int,
+    dividend_receivable_fen: int,
+    positions: Mapping[str, int],
+    mark_prices_fen: Mapping[str, int],
+    sellable_positions: Mapping[str, int] | None = None,
+) -> ReconciliationAccountState:
+    normalized_positions = dict(positions)
+    normalized_marks = dict(mark_prices_fen)
+    market_value_fen = sum(
+        quantity * normalized_marks[symbol]
+        for symbol, quantity in normalized_positions.items()
+    )
+    return ReconciliationAccountState(
+        cash_fen=cash_fen,
+        dividend_receivable_fen=dividend_receivable_fen,
+        positions=normalized_positions,
+        sellable_positions=dict(sellable_positions or {}),
+        mark_prices_fen=normalized_marks,
+        market_value_fen=market_value_fen,
+        equity_fen=cash_fen + dividend_receivable_fen + market_value_fen,
+    )
+
+
+def _ledger_observation(entry: CnEquityLedgerEntry) -> ReconciliationObservation:
+    transition = entry.model_dump(
+        mode="json",
+        include={
+            "sequence",
+            "trade_date",
+            "event",
+            "outcome",
+            "reason",
+            "order_id",
+            "symbol",
+            "side",
+            "requested_shares",
+            "filled_shares",
+            "price_fen",
+            "position_delta",
+            "cash_delta_fen",
+            "dividend_receivable_delta_fen",
+            "fees",
+        },
+    )
+    return ReconciliationObservation(
+        event_output=transition,
+        account_state=_account_observation(
+            cash_fen=entry.cash_fen,
+            dividend_receivable_fen=entry.dividend_receivable_fen,
+            positions=entry.positions,
+            sellable_positions=entry.sellable_positions,
+            mark_prices_fen=entry.mark_prices_fen,
+        ),
+    )
+
+
+def _validate_historical_identity(
+    historical: HistoricalRunIdentity,
+    *,
+    compilation: StrategyCompilation,
+    snapshot_sha256: str,
+    qe5: QuantaxisBacktestResult,
+) -> None:
+    expected_engine = ReconciliationEngineIdentity(
+        name="quantaxis",
+        version=qe5.worker.engine_version,
+        commit=QUANTAXIS_ENGINE_COMMIT,
+        source_sha256=qe5.worker.source_sha256,
+    )
+    if (
+        historical.owner_scope != compilation.engine_request.owner_scope
+        or historical.engine_request_sha256
+        != compilation.engine_request.content_sha256
+        or historical.execution_plan_sha256 != compilation.plan.content_sha256
+        or historical.snapshot_sha256 != snapshot_sha256
+        or historical.backtest_input_sha256 != qe5.worker.backtest_input_sha256
+        or historical.ledger_sha256 != qe5.ledger.content_sha256
+        or historical.original_engine != expected_engine
+    ):
+        raise ValueError("historical BacktestRun identity does not match QE5 replay inputs")
+
+
+def _persist_reconciliation(
+    *,
+    historical: HistoricalRunIdentity,
+    compilation: StrategyCompilation,
+    replay_input_sha256: str,
+    vnpy_version: str,
+    vnpy_source_sha256: Mapping[str, str],
+    checkpoints: tuple[ReconciliationCheckpoint, ...],
+    evidence_store: ReconciliationStore,
+) -> tuple[ReconciliationArtifact, StrategyValidationDecision]:
+    request = compilation.engine_request.payload
+    assert isinstance(request, EngineRequest)
+    artifact = create_reconciliation_artifact(
+        owner_scope=historical.owner_scope,
+        stream_id=historical.strategy_stream_id,
+        strategy_version_id=historical.strategy_version_id,
+        engine_request_id=request.request_id,
+        engine_request_sha256=historical.engine_request_sha256,
+        execution_plan_sha256=historical.execution_plan_sha256,
+        snapshot_sha256=historical.snapshot_sha256,
+        qe5_backtest_input_sha256=historical.backtest_input_sha256,
+        qe5_ledger_sha256=historical.ledger_sha256,
+        vnpy_replay_input_sha256=replay_input_sha256,
+        qe5_engine=historical.original_engine,
+        vnpy_engine=ReconciliationEngineIdentity(
+            name="vnpy",
+            version=vnpy_version,
+            commit=VNPY_ENGINE_COMMIT,
+            source_sha256=dict(vnpy_source_sha256),
+        ),
+        checkpoints=checkpoints,
+    )
+    evidence_store.put_artifact(artifact)
+    stored_artifact = evidence_store.get_artifact(
+        artifact.artifact_id,
+        owner_scope=artifact.owner_scope,
+    )
+    if stored_artifact is None:
+        raise ValueError("reconciliation artifact was not persisted")
+    decision = decide_strategy_validation(
+        stored_artifact,
+        owner_scope=historical.owner_scope,
+        stream_id=historical.strategy_stream_id,
+        strategy_version_id=historical.strategy_version_id,
+    )
+    evidence_store.put_decision(decision)
+    stored_decision = evidence_store.get_decision(
+        decision.decision_id,
+        owner_scope=decision.owner_scope,
+    )
+    if stored_decision is None:
+        raise ValueError("strategy validation decision was not persisted")
+    return stored_artifact, stored_decision
+
+
+def _model_json(value: BaseModel | None) -> dict[str, Any] | None:
+    return value.model_dump(mode="json") if value is not None else None
+
+
+def _ordinary_checkpoints(
+    *,
+    replay_events: list[dict[str, Any]],
+    ledger_entries: list[CnEquityLedgerEntry],
+    expected_orders: list[VnpyOrdinaryOrder],
+    expected_fills: list[VnpyOrdinaryFill],
+    expected_rejections: list[VnpyOrdinaryRejection],
+    expected_accounts: list[VnpyOrdinaryDailyAccount],
+    expected_receipts: list[VnpyOrdinaryEventReceipt],
+    result: VnpyOrdinaryReplayResult,
+    rule_version: str,
+) -> tuple[ReconciliationCheckpoint, ...]:
+    order_index = fill_index = rejection_index = account_index = receipt_index = 0
+    actual_cash = result.initial_cash_fen
+    actual_positions: dict[str, int] = {}
+    actual_marks: dict[str, int] = {}
+    checkpoints: list[ReconciliationCheckpoint] = []
+
+    for sequence, (event_input, ledger_entry) in enumerate(
+        zip(replay_events, ledger_entries),
+        start=1,
+    ):
+        expected_output: dict[str, Any]
+        actual_output: dict[str, Any]
+        if event_input["event"] == "order":
+            expected_order = expected_orders[order_index]
+            actual_order = (
+                result.orders[order_index]
+                if order_index < len(result.orders)
+                else None
+            )
+            order_index += 1
+            expected_output = {"order": _model_json(expected_order)}
+            actual_output = {"order": _model_json(actual_order)}
+            if expected_order.status == "filled":
+                expected_fill = expected_fills[fill_index]
+                actual_fill = (
+                    result.fills[fill_index]
+                    if fill_index < len(result.fills)
+                    else None
+                )
+                fill_index += 1
+                expected_output["fill"] = _model_json(expected_fill)
+                actual_output["fill"] = _model_json(actual_fill)
+                if actual_fill is not None:
+                    actual_cash = actual_fill.cash_fen
+                    actual_positions = dict(actual_fill.positions)
+                    actual_marks = {
+                        symbol: price
+                        for symbol, price in actual_marks.items()
+                        if symbol in actual_positions
+                    }
+                    if actual_fill.symbol in actual_positions:
+                        actual_marks[actual_fill.symbol] = actual_fill.price_fen
+                receipt_count = 2
+            else:
+                expected_rejection = expected_rejections[rejection_index]
+                actual_rejection = (
+                    result.rejections[rejection_index]
+                    if rejection_index < len(result.rejections)
+                    else None
+                )
+                rejection_index += 1
+                expected_output["rejection"] = _model_json(expected_rejection)
+                actual_output["rejection"] = _model_json(actual_rejection)
+                if actual_rejection is not None:
+                    actual_cash = actual_rejection.cash_fen
+                    actual_positions = dict(actual_rejection.positions)
+                    actual_marks = {
+                        symbol: price
+                        for symbol, price in actual_marks.items()
+                        if symbol in actual_positions
+                    }
+                receipt_count = 1
+        else:
+            expected_account = expected_accounts[account_index]
+            actual_account = (
+                result.daily_accounts[account_index]
+                if account_index < len(result.daily_accounts)
+                else None
+            )
+            account_index += 1
+            expected_output = {"daily_account": _model_json(expected_account)}
+            actual_output = {"daily_account": _model_json(actual_account)}
+            if actual_account is not None:
+                actual_cash = actual_account.cash_fen
+                actual_positions = dict(actual_account.positions)
+                actual_marks = dict(actual_account.mark_prices_fen)
+            receipt_count = 1
+
+        expected_event_receipts = expected_receipts[
+            receipt_index : receipt_index + receipt_count
+        ]
+        actual_event_receipts = result.event_receipts[
+            receipt_index : receipt_index + receipt_count
+        ]
+        receipt_index += receipt_count
+        expected_output["receipts"] = [
+            item.model_dump(mode="json") for item in expected_event_receipts
+        ]
+        actual_output["receipts"] = [
+            item.model_dump(mode="json") for item in actual_event_receipts
+        ]
+        expected_state = _account_observation(
+            cash_fen=ledger_entry.cash_fen,
+            dividend_receivable_fen=0,
+            positions=ledger_entry.positions,
+            mark_prices_fen=ledger_entry.mark_prices_fen,
+        )
+        actual_state = _account_observation(
+            cash_fen=actual_cash,
+            dividend_receivable_fen=0,
+            positions=actual_positions,
+            mark_prices_fen=actual_marks,
+        )
+        checkpoints.append(
+            ReconciliationCheckpoint(
+                sequence=sequence,
+                trade_date=ledger_entry.trade_date,
+                event=ledger_entry.event,
+                event_input=event_input,
+                event_input_sha256=canonical_sha256(event_input),
+                rule_version=rule_version,
+                qe5=ReconciliationObservation(
+                    event_output=expected_output,
+                    account_state=expected_state,
+                ),
+                vnpy=ReconciliationObservation(
+                    event_output=actual_output,
+                    account_state=actual_state,
+                ),
+            )
+        )
+
+    unconsumed = {
+        "orders": [item.model_dump(mode="json") for item in result.orders[order_index:]],
+        "fills": [item.model_dump(mode="json") for item in result.fills[fill_index:]],
+        "rejections": [
+            item.model_dump(mode="json")
+            for item in result.rejections[rejection_index:]
+        ],
+        "daily_accounts": [
+            item.model_dump(mode="json")
+            for item in result.daily_accounts[account_index:]
+        ],
+        "event_receipts": [
+            item.model_dump(mode="json")
+            for item in result.event_receipts[receipt_index:]
+        ],
+    }
+    if any(unconsumed.values()):
+        previous = checkpoints[-1]
+        actual_output = dict(previous.vnpy.event_output)
+        actual_output["unconsumed_result"] = unconsumed
+        checkpoints[-1] = ReconciliationCheckpoint(
+            sequence=previous.sequence,
+            trade_date=previous.trade_date,
+            event=previous.event,
+            event_input=previous.event_input,
+            event_input_sha256=previous.event_input_sha256,
+            rule_version=previous.rule_version,
+            qe5=previous.qe5,
+            vnpy=ReconciliationObservation(
+                event_output=actual_output,
+                account_state=previous.vnpy.account_state,
+            ),
+        )
+    return tuple(checkpoints)
+
+
+def _china_a_checkpoints(
+    *,
+    events: tuple[Any, ...],
+    expected_entries: tuple[CnEquityLedgerEntry, ...],
+    actual_entries: tuple[CnEquityLedgerEntry, ...],
+    rule_version: str,
+) -> tuple[ReconciliationCheckpoint, ...]:
+    if len(expected_entries) != len(events) or len(actual_entries) != len(events):
+        raise ValueError("China-A replay did not return one entry per input event")
+    return tuple(
+        ReconciliationCheckpoint(
+            sequence=sequence,
+            trade_date=expected.trade_date,
+            event=expected.event,
+            event_input=event.model_dump(mode="json"),
+            event_input_sha256=canonical_sha256(event),
+            rule_version=rule_version,
+            qe5=_ledger_observation(expected),
+            vnpy=_ledger_observation(actual),
+        )
+        for sequence, (event, expected, actual) in enumerate(
+            zip(events, expected_entries, actual_entries),
+            start=1,
+        )
+    )
 
 
 class VnpyOperationError(RuntimeError):
@@ -364,6 +733,8 @@ class VnpyOracleAdapter:
         snapshot: ResearchObject,
         snapshot_path: Path,
         qe5: QuantaxisBacktestResult,
+        historical_run: HistoricalRunIdentity,
+        evidence_store: ReconciliationStore,
     ) -> VnpyOrdinaryReplay:
         """Replay QE5 ordinary order intents and compare every account field."""
 
@@ -394,6 +765,12 @@ class VnpyOracleAdapter:
             or ledger.content_sha256 != canonical_sha256(ledger)
         ):
             raise ValueError("QE5 result identity does not match QE6-2 inputs")
+        _validate_historical_identity(
+            historical_run,
+            compilation=compilation,
+            snapshot_sha256=actual_snapshot_sha256,
+            qe5=qe5,
+        )
         if (
             worker.engine_version != QUANTAXIS_ENGINE_VERSION
             or worker.source_sha256 != QUANTAXIS_SOURCE_SHA256
@@ -441,6 +818,7 @@ class VnpyOracleAdapter:
         expected_rejections: list[VnpyOrdinaryRejection] = []
         expected_accounts: list[VnpyOrdinaryDailyAccount] = []
         expected_receipts: list[VnpyOrdinaryEventReceipt] = []
+        checkpoint_entries: list[CnEquityLedgerEntry] = []
         seen_order_ids: set[str] = set()
         supported_rejections = {
             "INSUFFICIENT_CASH",
@@ -504,6 +882,7 @@ class VnpyOracleAdapter:
                         "mark_prices_fen": None,
                     }
                 )
+                checkpoint_entries.append(entry)
                 expected_orders.append(
                     VnpyOrdinaryOrder(
                         source_sequence=entry.sequence,
@@ -581,6 +960,7 @@ class VnpyOracleAdapter:
                         "mark_prices_fen": entry.mark_prices_fen,
                     }
                 )
+                checkpoint_entries.append(entry)
                 expected_accounts.append(
                     VnpyOrdinaryDailyAccount(
                         source_sequence=entry.sequence,
@@ -647,19 +1027,36 @@ class VnpyOracleAdapter:
         ):
             raise ValueError("vn.py ordinary replay identity does not match QE5")
         if (
-            result.orders != tuple(expected_orders)
-            or result.fills != tuple(expected_fills)
-            or result.rejections != tuple(expected_rejections)
-            or result.daily_accounts != tuple(expected_accounts)
-            or result.event_receipts != tuple(expected_receipts)
-        ):
-            raise ValueError("vn.py ordinary ledger diverged from QE5")
-        if (
             result.engine_version != VNPY_ENGINE_VERSION
             or result.source_sha256 != VNPY_SOURCE_SHA256
         ):
             raise ValueError("worker engine provenance does not match audited vn.py")
-        return VnpyOrdinaryReplay(worker=result, qe5=qe5)
+        checkpoints = _ordinary_checkpoints(
+            replay_events=replay_events,
+            ledger_entries=checkpoint_entries,
+            expected_orders=expected_orders,
+            expected_fills=expected_fills,
+            expected_rejections=expected_rejections,
+            expected_accounts=expected_accounts,
+            expected_receipts=expected_receipts,
+            result=result,
+            rule_version=fee_schedule.rule_version,
+        )
+        artifact, decision = _persist_reconciliation(
+            historical=historical_run,
+            compilation=compilation,
+            replay_input_sha256=result.ordinary_replay_input_sha256,
+            vnpy_version=result.engine_version,
+            vnpy_source_sha256=result.source_sha256,
+            checkpoints=checkpoints,
+            evidence_store=evidence_store,
+        )
+        return VnpyOrdinaryReplay(
+            worker=result,
+            qe5=qe5,
+            artifact=artifact,
+            decision=decision,
+        )
 
     def reconcile_china_a(
         self,
@@ -668,6 +1065,8 @@ class VnpyOracleAdapter:
         snapshot: ResearchObject,
         snapshot_path: Path,
         qe5: QuantaxisBacktestResult,
+        historical_run: HistoricalRunIdentity,
+        evidence_store: ReconciliationStore,
     ) -> VnpyChinaAReplay:
         """Reconcile QE5 fees and China-A rules in an independent vn.py state."""
 
@@ -691,6 +1090,12 @@ class VnpyOracleAdapter:
             or ledger.content_sha256 != canonical_sha256(ledger)
         ):
             raise ValueError("QE5 result identity does not match QE6-3 inputs")
+        _validate_historical_identity(
+            historical_run,
+            compilation=compilation,
+            snapshot_sha256=snapshot_sha256,
+            qe5=qe5,
+        )
         identity = {
             "schema_version": "vibe.vnpy-event-path-request.v1",
             "engine_request": request.model_dump(mode="json"),
@@ -728,4 +1133,24 @@ class VnpyOracleAdapter:
             raise ValueError("vn.py China-A replay identity does not match QE5")
         if result.engine_version != VNPY_ENGINE_VERSION or result.source_sha256 != VNPY_SOURCE_SHA256:
             raise ValueError("worker engine provenance does not match audited vn.py")
-        return VnpyChinaAReplay(worker=result, qe5=qe5)
+        checkpoints = _china_a_checkpoints(
+            events=worker.events,
+            expected_entries=ledger.entries[1:],
+            actual_entries=result.entries,
+            rule_version=worker.rule_table_version,
+        )
+        artifact, decision = _persist_reconciliation(
+            historical=historical_run,
+            compilation=compilation,
+            replay_input_sha256=result.china_a_replay_input_sha256,
+            vnpy_version=result.engine_version,
+            vnpy_source_sha256=result.source_sha256,
+            checkpoints=checkpoints,
+            evidence_store=evidence_store,
+        )
+        return VnpyChinaAReplay(
+            worker=result,
+            qe5=qe5,
+            artifact=artifact,
+            decision=decision,
+        )

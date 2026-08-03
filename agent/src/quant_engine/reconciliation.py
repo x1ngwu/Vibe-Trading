@@ -2,9 +2,9 @@
 
 Confirmation, backtest completion, and independent-oracle validation are
 deliberately separate lifecycle facts.  This module persists the last one: an
-immutable summary of an exact QE5/vn.py comparison, including the first
-divergence when one exists, and a derived (never caller-selected) validation
-decision for one strategy version.
+immutable evidence closure for an exact QE5/vn.py comparison, including every
+ordered checkpoint and the first divergence when one exists, plus a derived
+(never caller-selected) validation decision for one strategy version.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from pydantic import (
 from src.research.contracts import canonical_json, canonical_sha256
 
 
-RECONCILIATION_ARTIFACT_SCHEMA = "vibe.reconciliation-artifact.v1"
+RECONCILIATION_ARTIFACT_SCHEMA = "vibe.reconciliation-artifact.v2"
 STRATEGY_VALIDATION_DECISION_SCHEMA = "vibe.strategy-validation-decision.v1"
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -177,7 +177,7 @@ class ReconciliationArtifactRef(_StrictModel):
 class ReconciliationArtifact(_StrictModel):
     """Immutable comparison outcome bound to all execution identities."""
 
-    schema_version: Literal["vibe.reconciliation-artifact.v1"] = RECONCILIATION_ARTIFACT_SCHEMA
+    schema_version: Literal["vibe.reconciliation-artifact.v2"] = RECONCILIATION_ARTIFACT_SCHEMA
     artifact_id: str = Field(pattern=_ARTIFACT_ID_PATTERN)
     content_sha256: str = Field(pattern=_SHA256_PATTERN)
     owner_scope: str = Field(pattern=_SCOPE_PATTERN)
@@ -192,6 +192,7 @@ class ReconciliationArtifact(_StrictModel):
     vnpy_replay_input_sha256: str = Field(pattern=_SHA256_PATTERN)
     qe5_engine: ReconciliationEngineIdentity
     vnpy_engine: ReconciliationEngineIdentity
+    checkpoints: tuple[ReconciliationCheckpoint, ...] = Field(min_length=1)
     comparison_sha256: str = Field(pattern=_SHA256_PATTERN)
     comparison_status: Literal["matched", "diverged"]
     compared_entries: int = Field(ge=1)
@@ -202,13 +203,17 @@ class ReconciliationArtifact(_StrictModel):
     def validate_artifact(self) -> "ReconciliationArtifact":
         if self.qe5_engine.name != "quantaxis" or self.vnpy_engine.name != "vnpy":
             raise ValueError("reconciliation engine roles are invalid")
-        if self.comparison_status == "matched":
-            if self.first_divergence is not None:
-                raise ValueError("matched artifact cannot contain a divergence")
-        elif self.first_divergence is None:
-            raise ValueError("diverged artifact requires first_divergence")
-        elif self.first_divergence.sequence > self.compared_entries:
-            raise ValueError("first divergence lies outside compared entries")
+        _validate_checkpoint_order(self.checkpoints)
+        if self.compared_entries != len(self.checkpoints):
+            raise ValueError("compared_entries does not match checkpoint evidence")
+        if self.comparison_sha256 != canonical_sha256(self.checkpoints):
+            raise ValueError("comparison_sha256 does not match checkpoint evidence")
+        expected_divergence = _first_divergence(self.checkpoints)
+        expected_status = "diverged" if expected_divergence is not None else "matched"
+        if self.comparison_status != expected_status:
+            raise ValueError("comparison_status does not match checkpoint evidence")
+        if self.first_divergence != expected_divergence:
+            raise ValueError("first_divergence does not match checkpoint evidence")
         expected = canonical_sha256(reconciliation_artifact_material(self))
         if self.content_sha256 != expected:
             raise ValueError("artifact content_sha256 does not match content")
@@ -284,7 +289,46 @@ def _different_fields(
         for key in sorted(set(left_section) | set(right_section)):
             if left_section.get(key) != right_section.get(key):
                 differences.append(f"{section}.{key}")
-    return tuple(differences)
+    return tuple(sorted(differences))
+
+
+def _validate_checkpoint_order(
+    checkpoints: Sequence[ReconciliationCheckpoint],
+) -> tuple[ReconciliationCheckpoint, ...]:
+    normalized = tuple(checkpoints)
+    if not normalized:
+        raise ReconciliationError("at least one reconciliation checkpoint is required")
+    if tuple(item.sequence for item in normalized) != tuple(
+        range(1, len(normalized) + 1)
+    ):
+        raise ReconciliationError(
+            "checkpoint sequences must be contiguous and start at one"
+        )
+    if any(
+        current.trade_date < previous.trade_date
+        for previous, current in zip(normalized, normalized[1:])
+    ):
+        raise ReconciliationError("checkpoint dates must be non-decreasing")
+    return normalized
+
+
+def _first_divergence(
+    checkpoints: Sequence[ReconciliationCheckpoint],
+) -> FirstDivergence | None:
+    divergent = next((item for item in checkpoints if not item.matches), None)
+    if divergent is None:
+        return None
+    return FirstDivergence(
+        sequence=divergent.sequence,
+        trade_date=divergent.trade_date,
+        event=divergent.event,
+        event_input=divergent.event_input,
+        event_input_sha256=divergent.event_input_sha256,
+        rule_version=divergent.rule_version,
+        differing_fields=_different_fields(divergent.qe5, divergent.vnpy),
+        qe5=divergent.qe5,
+        vnpy=divergent.vnpy,
+    )
 
 
 def create_reconciliation_artifact(
@@ -304,33 +348,10 @@ def create_reconciliation_artifact(
     checkpoints: Sequence[ReconciliationCheckpoint],
     created_at: datetime | None = None,
 ) -> ReconciliationArtifact:
-    """Compare ordered checkpoints and retain only the first divergence."""
+    """Compare and retain ordered checkpoints plus the derived first divergence."""
 
-    normalized = tuple(checkpoints)
-    if not normalized:
-        raise ReconciliationError("at least one reconciliation checkpoint is required")
-    if tuple(item.sequence for item in normalized) != tuple(range(1, len(normalized) + 1)):
-        raise ReconciliationError("checkpoint sequences must be contiguous and start at one")
-    if any(
-        current.trade_date < previous.trade_date
-        for previous, current in zip(normalized, normalized[1:])
-    ):
-        raise ReconciliationError("checkpoint dates must be non-decreasing")
-
-    divergent = next((item for item in normalized if not item.matches), None)
-    first_divergence = None
-    if divergent is not None:
-        first_divergence = FirstDivergence(
-            sequence=divergent.sequence,
-            trade_date=divergent.trade_date,
-            event=divergent.event,
-            event_input=divergent.event_input,
-            event_input_sha256=divergent.event_input_sha256,
-            rule_version=divergent.rule_version,
-            differing_fields=_different_fields(divergent.qe5, divergent.vnpy),
-            qe5=divergent.qe5,
-            vnpy=divergent.vnpy,
-        )
+    normalized = _validate_checkpoint_order(checkpoints)
+    first_divergence = _first_divergence(normalized)
     comparison_sha256 = canonical_sha256(normalized)
     material = {
         "schema_version": RECONCILIATION_ARTIFACT_SCHEMA,
@@ -346,6 +367,7 @@ def create_reconciliation_artifact(
         "vnpy_replay_input_sha256": vnpy_replay_input_sha256,
         "qe5_engine": qe5_engine.model_dump(mode="json"),
         "vnpy_engine": vnpy_engine.model_dump(mode="json"),
+        "checkpoints": [item.model_dump(mode="json") for item in normalized],
         "comparison_sha256": comparison_sha256,
         "comparison_status": "diverged" if first_divergence is not None else "matched",
         "compared_entries": len(normalized),
@@ -502,7 +524,7 @@ class ReconciliationStore:
         for directory in (self.artifacts_dir, self.decisions_dir):
             if directory.is_symlink():
                 raise ReconciliationIntegrityError("reconciliation directory must not be a symlink")
-            directory.mkdir(mode=0o700)
+            directory.mkdir(mode=0o700, exist_ok=True)
             os.chmod(directory, 0o700)
         if self.lock_path.is_symlink():
             raise ReconciliationIntegrityError("reconciliation lock must not be a symlink")

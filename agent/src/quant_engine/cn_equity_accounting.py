@@ -679,6 +679,8 @@ class CnEquityAccount:
                     "share split would create a fractional share"
                 )
             new_lots.append([acquired_date, quantity])
+        self._replace_marks(mark_prices_fen)
+        price_fen = mark_prices_fen[symbol]
         self._lots[symbol] = new_lots
         after = self.positions[symbol]
         return self._append(
@@ -687,8 +689,8 @@ class CnEquityAccount:
             outcome="applied",
             symbol=symbol,
             position_delta={symbol: after - before},
-            marks=mark_prices_fen,
-            price_fen=mark_prices_fen[symbol],
+            marks=None,
+            price_fen=price_fen,
         )
 
     def accrue_dividend(
@@ -750,6 +752,8 @@ class CnEquityAccount:
             raise CnEquityAccountingError(
                 "cash dividend entitlement is not representable in integer fen"
             )
+        self._replace_marks(mark_prices_fen)
+        price_fen = mark_prices_fen[symbol]
         self._receivables[symbol] = self._receivables.get(symbol, 0) + amount
         return self._append(
             trade_date=trade_date,
@@ -757,8 +761,8 @@ class CnEquityAccount:
             outcome="applied",
             symbol=symbol,
             dividend_receivable_delta_fen=amount,
-            marks=mark_prices_fen,
-            price_fen=mark_prices_fen[symbol],
+            marks=None,
+            price_fen=price_fen,
         )
 
     def pay_dividend(
@@ -774,6 +778,13 @@ class CnEquityAccount:
         amount = self._receivables.get(symbol, 0)
         if amount <= 0:
             raise CnEquityAccountingError("dividend payment has no receivable")
+        # Dividend entitlement is fixed on the record date.  The investor may
+        # legitimately sell the full position before the payment date, so the
+        # paid symbol does not necessarily have a current valuation mark.
+        # Validate and install the post-event marks before mutating cash or the
+        # receivable to keep failures atomic.
+        self._replace_marks(mark_prices_fen)
+        price_fen = mark_prices_fen.get(symbol)
         del self._receivables[symbol]
         self._cash_fen += amount
         return self._append(
@@ -783,8 +794,8 @@ class CnEquityAccount:
             symbol=symbol,
             cash_delta_fen=amount,
             dividend_receivable_delta_fen=-amount,
-            marks=mark_prices_fen,
-            price_fen=mark_prices_fen[symbol],
+            marks=None,
+            price_fen=price_fen,
         )
 
     def mark(

@@ -133,6 +133,7 @@ def test_qe6_4_matched_artifact_is_the_only_path_to_validated(tmp_path: Path) ->
 
     assert artifact.comparison_status == "matched"
     assert artifact.first_divergence is None
+    assert artifact.checkpoints == (_checkpoint(1), _checkpoint(2))
     assert decision.status == "validated"
     assert decision.reason == "INDEPENDENT_ORACLE_MATCH"
 
@@ -194,13 +195,32 @@ def test_qe6_4_artifact_contract_rejects_false_status_and_bad_input_hash() -> No
     divergent = _artifact((_checkpoint(1, vnpy_cash_delta=1),))
     forged = divergent.model_dump(mode="json")
     forged["comparison_status"] = "matched"
-    with pytest.raises(ValidationError, match="matched artifact cannot contain"):
+    with pytest.raises(ValidationError, match="comparison_status does not match"):
         ReconciliationArtifact.model_validate(forged)
 
     checkpoint = _checkpoint(1).model_dump(mode="json")
     checkpoint["event_input_sha256"] = "f" * 64
     with pytest.raises(ValidationError, match="does not match event_input"):
         ReconciliationCheckpoint.model_validate(checkpoint)
+
+
+def test_qe6_4_recomputed_outer_hash_cannot_hide_rewritten_comparison() -> None:
+    divergent = _artifact((_checkpoint(1, vnpy_cash_delta=1),))
+    forged = divergent.model_dump(mode="json")
+    forged["comparison_status"] = "matched"
+    forged["first_divergence"] = None
+    forged["comparison_sha256"] = "0" * 64
+    material = {
+        key: value
+        for key, value in forged.items()
+        if key not in {"artifact_id", "content_sha256", "created_at"}
+    }
+    digest = canonical_sha256(material)
+    forged["artifact_id"] = f"reconciliation-artifact:{digest}"
+    forged["content_sha256"] = digest
+
+    with pytest.raises(ValidationError, match="comparison_sha256 does not match"):
+        ReconciliationArtifact.model_validate(forged)
 
 
 def test_qe6_4_store_is_content_addressed_idempotent_and_detects_tampering(

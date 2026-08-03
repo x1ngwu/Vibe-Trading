@@ -276,7 +276,7 @@ class OracleGovernanceStore(ReconciliationStore):
         self.audits_dir = self.root / "audits"
         if self.audits_dir.is_symlink():
             raise ReconciliationIntegrityError("oracle audit directory must not be a symlink")
-        self.audits_dir.mkdir(mode=0o700)
+        self.audits_dir.mkdir(mode=0o700, exist_ok=True)
         os.chmod(self.audits_dir, 0o700)
 
     def put_audit(

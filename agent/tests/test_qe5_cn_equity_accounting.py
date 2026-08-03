@@ -163,6 +163,47 @@ def test_qe5_oracle_replays_qe1_hand_calculated_ledger_exactly() -> None:
     assert actual.entries[-1].equity_fen == 10_067_251
 
 
+def test_dividend_payment_survives_full_sale_and_invalid_marks_are_atomic() -> None:
+    account = _account()
+    symbol = "600002.SH"
+    account.submit_order(
+        _order("buy-before-record", date(2025, 1, 3), symbol, "buy", 100, 1000)
+    )
+    account.accrue_dividend(
+        trade_date=date(2025, 1, 6),
+        symbol=symbol,
+        entitled_shares=100,
+        cash_per_share_fen=5,
+        mark_prices_fen={symbol: 1000},
+    )
+    account.submit_order(
+        _order("sell-after-record", date(2025, 1, 7), symbol, "sell", 100, 1000)
+    )
+    before_cash = account.cash_fen
+    before_ledger = account.ledger()
+
+    with pytest.raises(CnEquityAccountingError, match="marks must cover"):
+        account.pay_dividend(
+            trade_date=date(2025, 1, 8),
+            symbol=symbol,
+            mark_prices_fen={symbol: 1000},
+        )
+    assert account.cash_fen == before_cash
+    assert account.ledger() == before_ledger
+
+    paid = account.pay_dividend(
+        trade_date=date(2025, 1, 8),
+        symbol=symbol,
+        mark_prices_fen={},
+    )
+    assert paid.price_fen is None
+    assert paid.positions == {}
+    assert paid.mark_prices_fen == {}
+    assert paid.cash_delta_fen == 500
+    assert paid.dividend_receivable_fen == 0
+    assert account.cash_fen == before_cash + 500
+
+
 def test_fee_schedule_uses_per_charge_half_up_and_minimum_commission() -> None:
     small_buy = calculate_cn_equity_fees(
         shares=1000,
