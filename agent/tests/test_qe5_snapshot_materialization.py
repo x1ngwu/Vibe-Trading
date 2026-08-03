@@ -21,7 +21,11 @@ from src.quant_engine import (
 )
 from src.quant_engine.runner import compute_snapshot_sha256
 from src.quant_engine.snapshot_materialization import SHANGHAI
-from src.research.contracts import DataSnapshotRef, ResearchSpec
+from src.research.contracts import (
+    DEFAULT_HOUSEHOLD_COSTS,
+    DataSnapshotRef,
+    ResearchSpec,
+)
 from src.research.store import ResearchStore
 
 AGENT_ROOT = Path(__file__).resolve().parents[1]
@@ -334,6 +338,20 @@ def test_materialization_bundle_and_optional_publish_are_content_bound(
     assert parsed["actions"][0]["cash_per_share_numerator_fen"] == 20
     assert parsed["actions"][0]["cash_per_share_denominator"] == 1
     assert parsed["actions"][0]["cash_rounding"] == "half_up_total_fen"
+    fee = result.snapshot_payload["rule_table"]["fee_schedule"]
+    assert fee["commission_tenths_bps"] == int(
+        DEFAULT_HOUSEHOLD_COSTS.commission_bps * 10
+    )
+    assert fee["minimum_commission_fen"] == int(
+        DEFAULT_HOUSEHOLD_COSTS.minimum_commission * 100
+    )
+    assert fee["sell_tax_tenths_bps"] == int(
+        DEFAULT_HOUSEHOLD_COSTS.sell_tax_bps * 10
+    )
+    assert fee["transfer_fee_tenths_bps"] == int(
+        DEFAULT_HOUSEHOLD_COSTS.transfer_fee_bps * 10
+    )
+    assert fee["rule_version"] == DEFAULT_HOUSEHOLD_COSTS.rule_version
     assert stat.S_IMODE(output.stat().st_mode) == 0o700
     for name in (
         "capture.json",

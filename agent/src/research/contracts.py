@@ -400,6 +400,16 @@ class CostSpec(_StrictModel):
     rule_version: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
+DEFAULT_HOUSEHOLD_COSTS = CostSpec(
+    commission_bps=3.0,
+    minimum_commission=5.0,
+    sell_tax_bps=5.0,
+    transfer_fee_bps=0.1,
+    slippage_bps=5.0,
+    rule_version="cn-equity-2025-01-01",
+)
+
+
 class RiskSpec(_StrictModel):
     """Basic portfolio risk limits for the first strategy family."""
 

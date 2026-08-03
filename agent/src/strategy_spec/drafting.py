@@ -24,8 +24,8 @@ from pydantic import (
 )
 
 from src.research.contracts import (
-    CostSpec,
     DataSnapshotRef,
+    DEFAULT_HOUSEHOLD_COSTS,
     EvaluationSpec,
     RiskSpec,
     canonical_json,
@@ -847,14 +847,7 @@ def draft_strategy_from_language(
     costs = _default(
         defaults,
         "costs",
-        CostSpec(
-            commission_bps=3.0,
-            minimum_commission=5.0,
-            sell_tax_bps=5.0,
-            transfer_fee_bps=0.1,
-            slippage_bps=5.0,
-            rule_version="cn-equity-2025-01-01",
-        ),
+        DEFAULT_HOUSEHOLD_COSTS,
         "首版固定使用版本化 A 股费用与滑点口径。",
     )
     benchmark = proposal.benchmark or _default(

@@ -20,6 +20,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 
 from src.research.contracts import (
     DataSnapshotRef,
+    DEFAULT_HOUSEHOLD_COSTS,
     ResearchObject,
     ResearchSpec,
     canonical_json,
@@ -289,10 +290,26 @@ class Qe5MarketCapture(_StrictModel):
 
 
 class Qe5MaterializationPolicy(_StrictModel):
-    commission_tenths_bps: int = Field(default=30, ge=0)
-    minimum_commission_fen: int = Field(default=500, ge=0)
-    sell_tax_tenths_bps: int = Field(default=50, ge=0)
-    transfer_fee_tenths_bps: int = Field(default=1, ge=0)
+    commission_tenths_bps: int = Field(
+        default=int(DEFAULT_HOUSEHOLD_COSTS.commission_bps * 10),
+        ge=0,
+    )
+    minimum_commission_fen: int = Field(
+        default=int(DEFAULT_HOUSEHOLD_COSTS.minimum_commission * 100),
+        ge=0,
+    )
+    sell_tax_tenths_bps: int = Field(
+        default=int(DEFAULT_HOUSEHOLD_COSTS.sell_tax_bps * 10),
+        ge=0,
+    )
+    transfer_fee_tenths_bps: int = Field(
+        default=int(DEFAULT_HOUSEHOLD_COSTS.transfer_fee_bps * 10),
+        ge=0,
+    )
+    fee_rule_version: str = Field(
+        default=DEFAULT_HOUSEHOLD_COSTS.rule_version,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+    )
     max_participation_bps: int = Field(default=1_000, ge=1, le=10_000)
 
 
@@ -389,10 +406,7 @@ def build_qe5_snapshot_payload(
                 "minimum_commission_fen": selected.minimum_commission_fen,
                 "sell_tax_tenths_bps": selected.sell_tax_tenths_bps,
                 "transfer_fee_tenths_bps": selected.transfer_fee_tenths_bps,
-                "rule_version": (
-                    "household-cn-fees-post-20230828-"
-                    f"{canonical_sha256(selected)[:16]}"
-                ),
+                "rule_version": selected.fee_rule_version,
             },
             "market_rules": rules,
             "max_participation_bps": selected.max_participation_bps,
