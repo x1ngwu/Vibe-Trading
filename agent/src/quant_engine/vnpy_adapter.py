@@ -175,6 +175,35 @@ class VnpyOrdinaryReplayResult(_StrictModel):
     source_sha256: dict[str, str]
 
 
+class VnpyChinaAReceipt(_StrictModel):
+    sequence: int = Field(ge=1)
+    event: str
+
+
+class VnpyChinaAReplayResult(_StrictModel):
+    operation_schema: Literal["vibe.vnpy-china-a-replay-result.v1"]
+    snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    engine_request_id: str
+    execution_plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    qe5_backtest_input_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    qe5_ledger_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    china_a_replay_input_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reconciled_entries: int = Field(ge=1)
+    receipts: tuple[VnpyChinaAReceipt, ...]
+    engine_version: str
+    source_sha256: dict[str, str]
+
+    @model_validator(mode="after")
+    def validate_receipts(self) -> "VnpyChinaAReplayResult":
+        if self.reconciled_entries != len(self.receipts):
+            raise ValueError("China-A receipt count mismatch")
+        if tuple(item.sequence for item in self.receipts) != tuple(
+            range(1, len(self.receipts) + 1)
+        ):
+            raise ValueError("China-A receipts are incomplete or unordered")
+        return self
+
+
 @dataclass(frozen=True)
 class VnpyEventReplay:
     """Validated QE6-1 EventEngine identity receipt."""
@@ -188,6 +217,12 @@ class VnpyOrdinaryReplay:
     """Validated QE6-2 ordinary ledger reconciliation."""
 
     worker: VnpyOrdinaryReplayResult
+    qe5: QuantaxisBacktestResult
+
+
+@dataclass(frozen=True)
+class VnpyChinaAReplay:
+    worker: VnpyChinaAReplayResult
     qe5: QuantaxisBacktestResult
 
 
@@ -625,3 +660,72 @@ class VnpyOracleAdapter:
         ):
             raise ValueError("worker engine provenance does not match audited vn.py")
         return VnpyOrdinaryReplay(worker=result, qe5=qe5)
+
+    def reconcile_china_a(
+        self,
+        *,
+        compilation: StrategyCompilation,
+        snapshot: ResearchObject,
+        snapshot_path: Path,
+        qe5: QuantaxisBacktestResult,
+    ) -> VnpyChinaAReplay:
+        """Reconcile QE5 fees and China-A rules in an independent vn.py state."""
+
+        request = compilation.engine_request.payload
+        if not isinstance(request, EngineRequest):
+            raise TypeError("compilation does not contain EngineRequest")
+        if request.engine.name != "quantaxis" or request.engine.commit != QUANTAXIS_ENGINE_COMMIT:
+            raise ValueError("QE6-3 requires the audited QE5 EngineRequest")
+        if snapshot.ref() != compilation.plan.data_snapshot_ref or not isinstance(snapshot.payload, DataSnapshotRef):
+            raise ValueError("QE6-3 snapshot identity does not match the plan")
+        snapshot_sha256 = compute_snapshot_sha256(snapshot_path.absolute())
+        worker, ledger = qe5.worker, qe5.ledger
+        if (
+            snapshot.payload.snapshot_sha256 != snapshot_sha256
+            or worker.snapshot_sha256 != snapshot_sha256
+            or ledger.data_snapshot_sha256 != snapshot_sha256
+            or worker.engine_request_id != request.request_id
+            or worker.execution_plan_sha256 != compilation.plan.content_sha256
+            or worker.engine_version != QUANTAXIS_ENGINE_VERSION
+            or worker.source_sha256 != QUANTAXIS_SOURCE_SHA256
+            or ledger.content_sha256 != canonical_sha256(ledger)
+        ):
+            raise ValueError("QE5 result identity does not match QE6-3 inputs")
+        identity = {
+            "schema_version": "vibe.vnpy-event-path-request.v1",
+            "engine_request": request.model_dump(mode="json"),
+            "execution_plan": compilation.plan.model_dump(mode="json"),
+            "data_snapshot_ref": snapshot.payload.model_dump(mode="json"),
+        }
+        payload = {
+            "schema_version": "vibe.vnpy-china-a-replay-request.v1",
+            "identity": identity,
+            "qe5_backtest_input_sha256": worker.backtest_input_sha256,
+            "qe5_ledger_sha256": ledger.content_sha256,
+            "ledger": ledger.model_dump(mode="json"),
+            "events": [item.model_dump(mode="json") for item in worker.events],
+        }
+        raw = self._run(
+            request_id=f"qe6-china-a:{request.request_id}",
+            operation="china_a_replay",
+            payload=payload,
+            snapshot_path=snapshot_path,
+            timeout_seconds=request.resource_limits.timeout_seconds,
+            max_stdout_bytes=request.resource_limits.max_stdout_bytes,
+            max_stderr_bytes=request.resource_limits.max_stderr_bytes,
+            memory_bytes=request.resource_limits.memory_bytes,
+        )
+        result = VnpyChinaAReplayResult.model_validate(raw)
+        if (
+            result.snapshot_sha256 != snapshot_sha256
+            or result.engine_request_id != request.request_id
+            or result.execution_plan_sha256 != compilation.plan.content_sha256
+            or result.qe5_backtest_input_sha256 != worker.backtest_input_sha256
+            or result.qe5_ledger_sha256 != ledger.content_sha256
+            or result.china_a_replay_input_sha256 != canonical_sha256(payload)
+            or result.reconciled_entries != len(ledger.entries) - 1
+        ):
+            raise ValueError("vn.py China-A replay identity does not match QE5")
+        if result.engine_version != VNPY_ENGINE_VERSION or result.source_sha256 != VNPY_SOURCE_SHA256:
+            raise ValueError("worker engine provenance does not match audited vn.py")
+        return VnpyChinaAReplay(worker=result, qe5=qe5)

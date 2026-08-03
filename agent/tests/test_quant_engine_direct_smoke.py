@@ -312,6 +312,7 @@ def test_capabilities_advertise_operations_only_after_provenance_passes(
         else:
             assert result["operations"]["event_replay"] == "qe6_1"
             assert result["operations"]["ordinary_replay"] == "qe6_2"
+            assert result["operations"]["china_a_replay"] == "qe6_3"
             assert result["operations"]["normalize_ledger"] == (
                 "qe6_2_ordinary_only"
             )

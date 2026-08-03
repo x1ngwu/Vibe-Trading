@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 from worker_runtime import WorkerError, run_worker  # noqa: E402
 from formal_event_path import build_event_replay_handler  # noqa: E402
 from ordinary_replay import build_ordinary_replay_handler  # noqa: E402
+from china_a_replay import build_china_a_replay_handler  # noqa: E402
 
 
 ENGINE_NAME = "vnpy"
@@ -98,6 +99,7 @@ def capabilities(payload: Mapping[str, Any], snapshot: Mapping[str, Any] | None)
             "direct_smoke": "poc",
             "event_replay": "qe6_1",
             "ordinary_replay": "qe6_2",
+            "china_a_replay": "qe6_3",
             "normalize_ledger": "qe6_2_ordinary_only",
             "backtest": "not_available",
         },
@@ -234,6 +236,9 @@ if __name__ == "__main__":
                     _load_vnpy_event_boundary
                 ),
                 "ordinary_replay": build_ordinary_replay_handler(
+                    _load_vnpy_event_boundary
+                ),
+                "china_a_replay": build_china_a_replay_handler(
                     _load_vnpy_event_boundary
                 ),
             },
