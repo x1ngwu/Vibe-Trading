@@ -526,7 +526,14 @@ class ReconciliationStore:
             if path.exists() or path.is_symlink():
                 loaded_type = type(value)
                 loaded = self._load(path, loaded_type)
-                loaded_id = getattr(loaded, "artifact_id", getattr(loaded, "decision_id", None))
+                loaded_id = next(
+                    (
+                        getattr(loaded, field_name)
+                        for field_name in ("artifact_id", "decision_id", "audit_id")
+                        if hasattr(loaded, field_name)
+                    ),
+                    None,
+                )
                 if loaded_id != expected_id:
                     raise ReconciliationIntegrityError("existing object path has different content")
                 return False

@@ -131,6 +131,14 @@ from .reconciliation import (
     create_reconciliation_artifact,
     decide_strategy_validation,
 )
+from .oracle_governance import (
+    ORACLE_REPLAY_AUDIT_SCHEMA,
+    HistoricalRunIdentity,
+    OracleGovernanceStore,
+    OracleReplayAudit,
+    audit_oracle_replay,
+    historical_run_identity,
+)
 from .product import (
     BacktestComparisonPayload,
     BacktestDiagnosticView,
@@ -198,6 +206,9 @@ __all__ = [
     "NormalizedBacktestPositionSnapshot",
     "NormalizedBacktestRecord",
     "NormalizedBacktestRejection",
+    "ORACLE_REPLAY_AUDIT_SCHEMA",
+    "OracleGovernanceStore",
+    "OracleReplayAudit",
     "MATERIALIZATION_SCHEMA",
     "PersistedBacktestRun",
     "PreparedBacktestRun",
@@ -235,6 +246,7 @@ __all__ = [
     "ReconciliationIntegrityError",
     "ReconciliationObservation",
     "ReconciliationStore",
+    "HistoricalRunIdentity",
     "FirstDivergence",
     "STRATEGY_VALIDATION_DECISION_SCHEMA",
     "StrategyValidationDecision",
@@ -265,6 +277,7 @@ __all__ = [
     "calculate_cn_equity_fees",
     "capture_baostock_market",
     "backup_backtest_runtime",
+    "audit_oracle_replay",
     "build_qe5_snapshot_payload",
     "canonical_json",
     "compute_snapshot_sha256",
@@ -274,6 +287,7 @@ __all__ = [
     "default_backtest_product_service",
     "normalize_quantaxis_backtest_run",
     "materialize_qe5_capture",
+    "historical_run_identity",
     "persist_backtest_visualization",
     "strict_json_loads",
     "validate_request",
