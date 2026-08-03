@@ -1,4 +1,4 @@
-"""vn.py EventEngine and order/trade lifecycle worker for the QE0 PoC only."""
+"""Pinned vn.py worker for the QE0 smoke and QE6 independent oracle."""
 
 from __future__ import annotations
 
@@ -10,9 +10,11 @@ from threading import Event as ThreadEvent
 import sys
 from typing import Any, Mapping
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 
 from worker_runtime import WorkerError, run_worker  # noqa: E402
+from formal_event_path import build_event_replay_handler  # noqa: E402
 
 
 ENGINE_NAME = "vnpy"
@@ -93,18 +95,37 @@ def capabilities(payload: Mapping[str, Any], snapshot: Mapping[str, Any] | None)
             "capabilities": "poc",
             "security_probe": "poc",
             "direct_smoke": "poc",
-            "normalize_ledger": "not_available_until_qe6",
-            "backtest": "not_available_until_qe6",
+            "event_replay": "qe6_1",
+            "normalize_ledger": "not_available_until_qe6_2",
+            "backtest": "not_available",
         },
         "protocol": {"name": "vibe.quant-engine.jsonl", "schema_version": "1.0"},
     }
 
 
+def _load_vnpy_event_boundary() -> Mapping[str, Any]:
+    """Load only the audited EventEngine boundary used by QE6-1."""
+
+    installed_version, source_sha256 = _verify_installation()
+    try:
+        from vnpy.event import Event, EventEngine
+    except Exception as exc:
+        raise WorkerError(
+            "ENGINE_IMPORT_ERROR",
+            f"{type(exc).__name__}: {exc}",
+        ) from exc
+    return {
+        "version": installed_version,
+        "source_sha256": source_sha256,
+        "Event": Event,
+        "EventEngine": EventEngine,
+    }
+
+
 def direct_smoke(payload: Mapping[str, Any], snapshot: Mapping[str, Any] | None) -> Mapping[str, Any]:
     try:
-        _, source_sha256 = _verify_installation()
+        boundary = _load_vnpy_event_boundary()
         import vnpy
-        from vnpy.event import Event, EventEngine
         from vnpy.trader.constant import Direction, Exchange, Status
         from vnpy.trader.object import OrderData, TradeData
     except WorkerError:
@@ -128,7 +149,8 @@ def direct_smoke(payload: Mapping[str, Any], snapshot: Mapping[str, Any] | None)
         if position == 100:
             completed.set()
 
-    engine = EventEngine(interval=0.01)
+    event_type = boundary["Event"]
+    engine = boundary["EventEngine"](interval=0.01)
     engine.register("eOrder", on_order)
     engine.register("eTrade", on_trade)
     engine.start()
@@ -140,7 +162,7 @@ def direct_smoke(payload: Mapping[str, Any], snapshot: Mapping[str, Any] | None)
             (Status.ALLTRADED, 100),
         ):
             engine.put(
-                Event(
+                event_type(
                     "eOrder",
                     OrderData(
                         gateway_name="QE0",
@@ -158,7 +180,7 @@ def direct_smoke(payload: Mapping[str, Any], snapshot: Mapping[str, Any] | None)
             )
         for tradeid, volume in (("trade-1", 40), ("trade-2", 60)):
             engine.put(
-                Event(
+                event_type(
                     "eTrade",
                     TradeData(
                         gateway_name="QE0",
@@ -181,7 +203,7 @@ def direct_smoke(payload: Mapping[str, Any], snapshot: Mapping[str, Any] | None)
     return {
         "import": {
             "version": getattr(vnpy, "__version__", None),
-            "source_sha256": source_sha256,
+            "source_sha256": boundary["source_sha256"],
         },
         "event_count": len(events),
         "event_types": [item["type"] for item in events],
@@ -196,6 +218,12 @@ if __name__ == "__main__":
         run_worker(
             engine_name=ENGINE_NAME,
             engine_commit=ENGINE_COMMIT,
-            handlers={"capabilities": capabilities, "direct_smoke": direct_smoke},
+            handlers={
+                "capabilities": capabilities,
+                "direct_smoke": direct_smoke,
+                "event_replay": build_event_replay_handler(
+                    _load_vnpy_event_boundary
+                ),
+            },
         )
     )

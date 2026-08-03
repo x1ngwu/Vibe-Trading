@@ -309,3 +309,9 @@ def test_capabilities_advertise_operations_only_after_provenance_passes(
                 "status": "qe2",
                 "whitelist": ["ma", "ema"],
             }
+        else:
+            assert result["operations"]["event_replay"] == "qe6_1"
+            assert result["operations"]["normalize_ledger"] == (
+                "not_available_until_qe6_2"
+            )
+            assert result["operations"]["backtest"] == "not_available"

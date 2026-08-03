@@ -76,6 +76,16 @@ from .quantaxis_adapter import (
     QuantaxisRiskPolicy,
     write_quantaxis_backtest_snapshot,
 )
+from .vnpy_adapter import (
+    VNPY_ENGINE_COMMIT,
+    VNPY_ENGINE_VERSION,
+    VNPY_SOURCE_SHA256,
+    VnpyEventPathResult,
+    VnpyEventReplay,
+    VnpyIdentityEvent,
+    VnpyOperationError,
+    VnpyOracleAdapter,
+)
 from .runner import RunResult, WorkerConfig, WorkerExecutionError, WorkerRunner, compute_snapshot_sha256
 from .snapshot_materialization import (
     CAPTURE_SCHEMA,
@@ -190,6 +200,14 @@ __all__ = [
     "RunResult",
     "TRANSITION_START_DATE",
     "UNIVERSE_MANIFEST_SCHEMA",
+    "VNPY_ENGINE_COMMIT",
+    "VNPY_ENGINE_VERSION",
+    "VNPY_SOURCE_SHA256",
+    "VnpyEventPathResult",
+    "VnpyEventReplay",
+    "VnpyIdentityEvent",
+    "VnpyOperationError",
+    "VnpyOracleAdapter",
     "WorkerConfig",
     "WorkerExecutionError",
     "WorkerRunner",
