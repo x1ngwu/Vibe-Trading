@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from src.tools.backtest_tool import run_backtest
+from src.tools import backtest_tool
 from src.tools.edit_file_tool import EditFileTool
 from src.tools.read_file_tool import ReadFileTool
 from src.tools.write_file_tool import WriteFileTool
@@ -65,6 +66,28 @@ def test_backtest_rejects_unconfigured_absolute_run_dir(tmp_path: Path, monkeypa
 
     assert body["status"] == "error"
     assert "outside allowed run roots" in body["error"]
+
+
+def test_backtest_rejects_local_canonical_capability(tmp_path: Path, monkeypatch) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    monkeypatch.setattr(backtest_tool, "safe_run_dir", lambda _value: run_dir)
+    (run_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "source": "local_canonical",
+                "codes": ["600000.SH"],
+                "start_date": "2025-01-01",
+                "end_date": "2025-01-31",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    body = _body(run_backtest(str(run_dir)))
+
+    assert body["status"] == "error"
+    assert "unsupported_capability" in body["error"]
 
 
 def test_tilde_expansion_resolves_to_mock_home(tmp_path: Path, monkeypatch) -> None:

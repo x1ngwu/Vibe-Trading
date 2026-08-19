@@ -53,13 +53,15 @@ class MarketDataTool(BaseTool):
                     "alphavantage",
                     "tiingo",
                     "fmp",
+                    "local_canonical",
                 ],
                 "description": (
                     "Data source. 'auto' detects from symbol format with fallback. "
                     "Free, no key: yfinance/yahoo (US/HK equities), okx/ccxt "
                     "(crypto), baostock/tencent/eastmoney/sina/akshare/mootdx "
                     "(China A-shares), stooq (global EOD). Key-gated REST: tushare "
-                    "(China A-shares), finnhub/alphavantage/tiingo/fmp (US/global)."
+                    "(China A-shares), finnhub/alphavantage/tiingo/fmp (US/global). "
+                    "Use local_canonical explicitly for the approved local A-share daily dataset."
                 ),
                 "default": "auto",
             },

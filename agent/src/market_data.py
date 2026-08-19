@@ -91,6 +91,8 @@ def fetch_market_data(
 ) -> dict[str, Any]:
     """Fetch normalized OHLCV data through the repository loader layer."""
     results: dict[str, Any] = {}
+    provenance: dict[str, Any] = {}
+    source_errors: dict[str, dict[str, str]] = {}
 
     if source == "auto":
         groups: dict[str, list[str]] = {}
@@ -101,18 +103,26 @@ def fetch_market_data(
         groups = {source: list(codes)}
 
     for src, src_codes in groups.items():
-        loader_cls = loader_resolver(src)
-        loader = loader_cls()
         try:
+            loader_cls = loader_resolver(src)
+            loader = loader_cls()
             data_map = loader.fetch(src_codes, start_date, end_date, interval=interval)
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "market-data loader %r failed for %s; codes fall through to _unresolved",
                 src,
                 src_codes,
             )
+            if src == "local_canonical":
+                source_errors[src] = {
+                    "status": str(getattr(exc, "status", "source_unavailable")),
+                    "detail": str(exc),
+                }
             data_map = {}
         for symbol, df in data_map.items():
+            frame_provenance = getattr(df, "attrs", {}).get("provenance")
+            if isinstance(frame_provenance, dict):
+                provenance[symbol] = frame_provenance
             records = df.reset_index().to_dict(orient="records")
             for row in records:
                 for key, value in row.items():
@@ -122,6 +132,10 @@ def fetch_market_data(
     unresolved = [code for code in codes if code not in results]
     if unresolved:
         results["_unresolved"] = unresolved
+    if provenance:
+        results["_provenance"] = provenance
+    if source_errors:
+        results["_errors"] = source_errors
 
     return results
 

@@ -34,6 +34,7 @@ MARKET_INTERVAL_PROVIDER_CAPABILITIES: dict[str, dict[str, frozenset[str]]] = {
         "baostock": _DAILY_ONLY,
         "akshare": _DAILY_ONLY,
         "tushare": _ALL_SUPPORTED_INTERVALS,
+        "local_canonical": _DAILY_ONLY,
     },
     "us_equity": {
         "yahoo": _ALL_SUPPORTED_INTERVALS,
@@ -469,6 +470,7 @@ class PriceChartTool(BaseTool):
         data: dict[str, Any] = {}
         unresolved: set[str] = set()
         source_by_symbol: dict[str, str] = {}
+        provenance_by_symbol: dict[str, dict[str, Any]] = {}
         fetch_start_by_symbol: dict[str, str] = {}
         source_attempts: dict[str, list[dict[str, str]]] = {
             symbol: [] for symbol in codes
@@ -531,6 +533,13 @@ class PriceChartTool(BaseTool):
                     source_attempts[symbol].append(attempt)
                     continue
 
+                source_error = source_data.get("_errors", {}).get(actual_source)
+                if isinstance(source_error, dict):
+                    attempt["status"] = str(
+                        source_error.get("status", "unavailable")
+                    )
+                    source_attempts[symbol].append(attempt)
+                    continue
                 candidate_rows = (
                     source_data.get(symbol) if isinstance(source_data, dict) else None
                 )
@@ -544,6 +553,9 @@ class PriceChartTool(BaseTool):
                 data[symbol] = candidate_rows
                 source_by_symbol[symbol] = actual_source
                 fetch_start_by_symbol[symbol] = fetch_start
+                candidate_provenance = source_data.get("_provenance", {}).get(symbol)
+                if isinstance(candidate_provenance, dict):
+                    provenance_by_symbol[symbol] = candidate_provenance
                 break
             else:
                 unresolved.add(symbol)
@@ -565,6 +577,7 @@ class PriceChartTool(BaseTool):
                 continue
 
             actual_source = source_by_symbol[symbol]
+            source_provenance = provenance_by_symbol.get(symbol, {})
             effective_fetch_start = fetch_start_by_symbol[symbol]
             range_truncated = effective_fetch_start > start_date
             truncated = row_truncated or range_truncated
@@ -579,7 +592,9 @@ class PriceChartTool(BaseTool):
                 "market": _market_for(symbol),
                 "timeframe": interval,
                 "source": actual_source,
-                "adjustment": _adjustment_for(actual_source),
+                "adjustment": source_provenance.get("adjustment", {}).get(
+                    "price_basis", _adjustment_for(actual_source)
+                ),
                 "timezone": _timezone_for(symbol, actual_source),
                 "requested_start": start_date,
                 "requested_end": end_date,
@@ -593,6 +608,15 @@ class PriceChartTool(BaseTool):
                 "dropped_bar_count": dropped_bar_count,
                 "bars": bars,
             }
+            if source_provenance:
+                payload["provider"] = source_provenance.get("provider")
+                payload["provider_version"] = source_provenance.get("provider_version")
+                payload["canonical_version"] = source_provenance.get("canonical_version")
+                payload["watermark"] = source_provenance.get("watermark")
+                payload["units"] = source_provenance.get("units")
+                payload["completeness"] = source_provenance.get("completeness")
+                payload["fallback"] = source_provenance.get("fallback")
+                payload["warnings"] = source_provenance.get("warnings", [])
             _write_json(output_dir / f"{visualization_id}.json", payload)
 
             spec = {
@@ -614,6 +638,18 @@ class PriceChartTool(BaseTool):
                     "fallback_text": f"{symbol}: {len(bars)} {interval} bars ({bars[0]['time']} to {bars[-1]['time']})",
                 }
             )
+            for key in (
+                "provider",
+                "provider_version",
+                "canonical_version",
+                "watermark",
+                "units",
+                "completeness",
+                "fallback",
+                "warnings",
+            ):
+                if key in payload:
+                    spec[key] = payload[key]
             manifest = [item for item in manifest if item.get("visualization_id") != visualization_id]
             manifest.append(spec)
             created.append(spec)

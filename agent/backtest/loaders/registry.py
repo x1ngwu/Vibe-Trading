@@ -51,6 +51,7 @@ VALID_SOURCES: set[str] = {
     "qveris",  # QVERIS-INTEGRATION
     "india_broker",
     "local",
+    "local_canonical",
     "auto",
 }
 
@@ -97,6 +98,7 @@ def _ensure_registered() -> None:
         "backtest.loaders.qveris_loader",  # QVERIS-INTEGRATION
         "backtest.loaders.india_broker_loader",
         "backtest.loaders.local_loader",
+        "backtest.loaders.local_canonical_loader",
     ]
     import importlib
     for mod in _loader_modules:
@@ -113,7 +115,9 @@ def _ensure_registered() -> None:
 # unavailable ``local`` request can degrade into an unrelated network source.
 # An explicit ``local`` request that is unavailable is a config problem the user
 # must see, not something to paper over with a Yahoo/Tencent fetch.
-_NO_NETWORK_FALLBACK_SOURCES: frozenset[str] = frozenset({"local", "qveris"})  # QVERIS-INTEGRATION
+_NO_NETWORK_FALLBACK_SOURCES: frozenset[str] = frozenset(
+    {"local", "local_canonical", "qveris"}
+)  # QVERIS-INTEGRATION
 
 
 # ---------------------------------------------------------------------------
@@ -207,11 +211,18 @@ def get_loader_cls_with_fallback(source: str) -> Type[Any]:
     # auto-resolver, so falling back through it would fetch network data the
     # user never asked for and mask a Data Bridge config problem. Fail loudly.
     if source in _NO_NETWORK_FALLBACK_SOURCES:
+        if source == "local":
+            hint = (
+                "Check your local Data Bridge config "
+                "(~/.vibe-trading/data-bridge/config.yaml)."
+            )
+        elif source == "local_canonical":
+            hint = "Check the canonical catalog, manifest, and read-only data mount."
+        else:
+            hint = "Check the source-specific configuration."
         raise NoAvailableSourceError(
             f"Data source '{source}' is unavailable and does not fall back to a "
-            f"network source. Check your local Data Bridge config "
-            f"(~/.vibe-trading/data-bridge/config.yaml) — it must exist and list "
-            f"at least one source."
+            f"network source. {hint}"
         )
 
     # Source unavailable — try same-market fallback

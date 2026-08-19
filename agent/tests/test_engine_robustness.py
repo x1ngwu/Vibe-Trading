@@ -355,6 +355,15 @@ class TestBacktestConfigSchema:
                 source="bloomberg",
             )
 
+    def test_local_canonical_is_rejected_for_backtests(self) -> None:
+        with pytest.raises(Exception, match="unsupported capability"):
+            BacktestConfigSchema(
+                codes=["600000.SH"],
+                start_date="2025-01-01",
+                end_date="2025-06-01",
+                source="local_canonical",
+            )
+
     def test_mootdx_and_futu_sources_accepted(self) -> None:
         """mootdx and futu are registered loaders, so config validation must
         accept them. Regression: ``_VALID_SOURCES`` drifted and rejected both

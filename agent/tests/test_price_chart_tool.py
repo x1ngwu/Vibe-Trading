@@ -30,6 +30,10 @@ class _IndiaBrokerLoader:
     name = "india_broker"
 
 
+class _LocalCanonicalLoader:
+    name = "local_canonical"
+
+
 def test_system_prompt_routes_chart_requests_to_price_chart_tool() -> None:
     from src.agent.context import _SYSTEM_PROMPT
 
@@ -119,6 +123,61 @@ def test_price_chart_tool_persists_compact_manifest(monkeypatch, tmp_path) -> No
     )
     assert payload["bars"][0]["time"] == "2026-07-18"
     assert payload["bars"][1]["close"] == 12.0
+
+
+def test_price_chart_exposes_local_canonical_provenance(monkeypatch, tmp_path) -> None:
+    provenance = {
+        "source": "local_canonical",
+        "provider": "vendor_a",
+        "provider_version": "delivery-v1",
+        "canonical_version": "a" * 64,
+        "adjustment": {"price_basis": "raw"},
+        "units": {"volume": "lot_100_shares"},
+        "watermark": "2026-08-14",
+        "completeness": "complete",
+        "fallback": False,
+        "warnings": [],
+    }
+
+    def fake_fetch(**kwargs):
+        return {
+            "600519.SH": [
+                {
+                    "trade_date": "2026-08-14",
+                    "open": 10,
+                    "high": 12,
+                    "low": 9,
+                    "close": 11,
+                    "volume": 100,
+                }
+            ],
+            "_provenance": {"600519.SH": provenance},
+        }
+
+    monkeypatch.setattr(price_chart_tool, "safe_run_dir", lambda _value: tmp_path)
+    monkeypatch.setattr(
+        price_chart_tool, "get_loader", lambda _source: _LocalCanonicalLoader
+    )
+    monkeypatch.setattr(price_chart_tool, "fetch_market_data", fake_fetch)
+
+    result = json.loads(
+        price_chart_tool.PriceChartTool().execute(
+            codes=["600519.SH"],
+            start_date="2026-08-14",
+            end_date="2026-08-14",
+            source="local_canonical",
+            interval="1D",
+            run_dir="ignored-in-test",
+        )
+    )
+    spec = result["visualizations"][0]
+    assert spec["source"] == "local_canonical"
+    assert spec["provider"] == "vendor_a"
+    assert spec["canonical_version"] == "a" * 64
+    assert spec["adjustment"] == "raw"
+    assert spec["watermark"] == "2026-08-14"
+    assert spec["completeness"] == "complete"
+    assert spec["fallback"] is False
 
 
 @pytest.mark.parametrize(

@@ -115,6 +115,11 @@ class BacktestConfigSchema(BaseModel):
     def valid_source(cls, v: str) -> str:
         if v not in VALID_SOURCES:
             raise ValueError(f"unsupported source {v!r}, must be one of {VALID_SOURCES}")
+        if v == "local_canonical":
+            raise ValueError(
+                "unsupported capability: local_canonical is available for "
+                "price queries and charts, not backtests"
+            )
         return v
 
     @field_validator("fundamental_fields")

@@ -41,6 +41,17 @@ def run_backtest(run_dir: str) -> str:
 
     if config["source"] not in VALID_SOURCES:
         return json.dumps({"status": "error", "error": f"source must be one of {VALID_SOURCES}, got: {config['source']}"}, ensure_ascii=False)
+    if config["source"] == "local_canonical":
+        return json.dumps(
+            {
+                "status": "error",
+                "error": (
+                    "unsupported_capability: local_canonical is available for "
+                    "price queries and charts, not backtests"
+                ),
+            },
+            ensure_ascii=False,
+        )
 
     signal_path = run_path / "code" / "signal_engine.py"
     if not signal_path.exists():
