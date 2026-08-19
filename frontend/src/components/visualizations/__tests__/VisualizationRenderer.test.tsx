@@ -96,6 +96,51 @@ describe("VisualizationRenderer", () => {
     expect(await screen.findByTestId("candlestick-chart")).toHaveAttribute("data-initial-range", "5D");
   });
 
+  it("shows canonical provenance, watermark, units, fallback, and warnings", async () => {
+    vi.spyOn(api, "getRunVisualization").mockResolvedValue({
+      schema_version: 1,
+      visualization_id: "kline_local",
+      type: "candlestick_volume",
+      bars: [{ time: "2026-08-14", open: 10, high: 12, low: 9, close: 11, volume: 100 }],
+    });
+    render(
+      <VisualizationRenderer
+        runId="run-local"
+        visualizations={[{
+          ...spec,
+          visualization_id: "kline_local",
+          data_ref: "kline_local",
+          source: "tencent",
+          provider: "vendor_a",
+          provider_version: "delivery-v1",
+          canonical_version: "a".repeat(64),
+          watermark: "2026-08-14",
+          units: { vol: { value: "lot_100_shares" } },
+          completeness: "complete",
+          fallback: true,
+          fallback_reason: "local_coverage_incomplete",
+          warnings: ["identifier history is limited"],
+        }]}
+      />,
+    );
+
+    expect(await screen.findByText(/vendor_a@delivery-v1/)).toHaveTextContent(
+      "canonical aaaaaaaaaaaa",
+    );
+    expect(screen.getByText(/vendor_a@delivery-v1/)).toHaveTextContent(
+      "through 2026-08-14",
+    );
+    expect(screen.getByText(/vendor_a@delivery-v1/)).toHaveTextContent(
+      "volume lot_100_shares",
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Fallback source used: local coverage incomplete",
+    );
+    expect(screen.getByText(/Data warning:/)).toHaveTextContent(
+      "identifier history is limited",
+    );
+  });
+
   it("uses the locale-aware chart theme for the header change color", async () => {
     document.documentElement.lang = "zh-CN";
     vi.spyOn(api, "getRunVisualization").mockResolvedValue({

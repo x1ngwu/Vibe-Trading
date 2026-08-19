@@ -81,6 +81,59 @@ def test_ready_returns_503_when_provider_not_ready(
     assert resp.json()["detail"] == "LLM provider not configured"
 
 
+def test_ready_returns_503_when_enabled_local_canonical_is_unavailable(
+    local_client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(system_routes, "_provider_readiness", lambda: (True, "ready"))
+    monkeypatch.setattr(
+        system_routes,
+        "_local_canonical_readiness",
+        lambda: (False, "local canonical data unavailable"),
+    )
+    resp = local_client.get("/ready")
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "local canonical data unavailable"
+
+
+def test_local_canonical_readiness_disabled_does_not_resolve_loader(monkeypatch) -> None:
+    import src.market_data as market_data
+
+    monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", "disabled")
+    monkeypatch.setattr(
+        market_data,
+        "get_loader",
+        lambda _source: pytest.fail("disabled mode must not resolve the loader"),
+    )
+    assert system_routes._local_canonical_readiness() == (True, "disabled")
+
+
+def test_local_canonical_readiness_requires_available_reader(monkeypatch) -> None:
+    import src.market_data as market_data
+
+    class UnavailableLoader:
+        def is_available(self) -> bool:
+            return False
+
+    monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", "explicit")
+    monkeypatch.setattr(market_data, "get_loader", lambda _source: UnavailableLoader)
+    assert system_routes._local_canonical_readiness() == (
+        False,
+        "local canonical data unavailable",
+    )
+
+
+def test_local_canonical_readiness_accepts_enabled_available_reader(monkeypatch) -> None:
+    import src.market_data as market_data
+
+    class AvailableLoader:
+        def is_available(self) -> bool:
+            return True
+
+    monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", "auto")
+    monkeypatch.setattr(market_data, "get_loader", lambda _source: AvailableLoader)
+    assert system_routes._local_canonical_readiness() == (True, "ready")
+
+
 def test_readiness_helper_real_missing_credential(monkeypatch: pytest.MonkeyPatch):
     """The un-mocked helper flags a configured provider with no credential."""
     import src.providers.llm as llm

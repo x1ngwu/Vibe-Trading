@@ -61,7 +61,9 @@ class MarketDataTool(BaseTool):
                     "(crypto), baostock/tencent/eastmoney/sina/akshare/mootdx "
                     "(China A-shares), stooq (global EOD). Key-gated REST: tushare "
                     "(China A-shares), finnhub/alphavantage/tiingo/fmp (US/global). "
-                    "Use local_canonical explicitly for the approved local A-share daily dataset."
+                    "local_canonical is available only when the server enables its "
+                    "explicit or auto mode; it supports the approved local A-share "
+                    "daily dataset only."
                 ),
                 "default": "auto",
             },

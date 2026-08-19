@@ -47,8 +47,17 @@ export interface CandlestickVisualizationSpec {
   market?: string;
   timeframe?: string;
   source?: string;
+  provider?: string;
+  provider_version?: string;
+  canonical_version?: string;
   adjustment?: string;
   timezone?: string;
+  watermark?: string;
+  units?: Record<string, unknown>;
+  completeness?: string;
+  fallback?: boolean;
+  fallback_reason?: string;
+  warnings?: string[];
   requested_start?: string;
   requested_end?: string;
   effective_fetch_start?: string;

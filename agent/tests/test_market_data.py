@@ -22,6 +22,7 @@ from src.market_data import (
     detect_source,
     fetch_market_data,
     fetch_market_data_json,
+    local_canonical_mode,
 )
 
 
@@ -178,6 +179,15 @@ class _IncompleteLocalLoader:
         raise error
 
 
+class _IntegrityLocalLoader:
+    name = "local_canonical"
+
+    def fetch(self, *args, **kwargs):
+        error = RuntimeError("canonical manifest identity is invalid")
+        error.status = "integrity_error"
+        raise error
+
+
 def test_fetch_explicit_source_normalizes_rows() -> None:
     out = fetch_market_data(
         codes=["AAPL.US"],
@@ -211,6 +221,186 @@ def test_fetch_auto_groups_by_detected_source() -> None:
     assert "AAPL.US" in out and "BTC-USDT" in out
 
 
+@pytest.mark.parametrize("mode", ["disabled", "explicit"])
+def test_auto_a_share_preserves_network_route_until_auto_mode(
+    monkeypatch, mode: str
+) -> None:
+    monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", mode)
+    seen: list[str] = []
+
+    def resolver(src: str):
+        seen.append(src)
+        return _StubLoader
+
+    out = fetch_market_data(
+        codes=["600519.SH"],
+        start_date="2026-01-01",
+        end_date="2026-01-02",
+        source="auto",
+        loader_resolver=resolver,
+    )
+    assert "600519.SH" in out
+    assert seen == ["tencent"]
+    assert out["_routing"]["600519.SH"]["actual_source"] == "tencent"
+
+
+def test_disabled_mode_rejects_explicit_local_without_resolving_loader(monkeypatch) -> None:
+    monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", "disabled")
+
+    def unexpected_resolver(_src: str):
+        raise AssertionError("disabled mode must not resolve or open the catalog")
+
+    out = fetch_market_data(
+        codes=["600519.SH"],
+        start_date="2026-01-01",
+        end_date="2026-01-02",
+        source="local_canonical",
+        loader_resolver=unexpected_resolver,
+    )
+    assert out["_unresolved"] == ["600519.SH"]
+    assert out["_errors"]["local_canonical"]["status"] == "source_disabled"
+
+
+def test_auto_mode_uses_local_for_covered_a_share_daily(monkeypatch) -> None:
+    monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", "auto")
+    seen: list[str] = []
+
+    def resolver(src: str):
+        seen.append(src)
+        return _StubLoader
+
+    out = fetch_market_data(
+        codes=["600519.SH"],
+        start_date="2026-01-01",
+        end_date="2026-01-02",
+        source="auto",
+        loader_resolver=resolver,
+    )
+    assert seen == ["local_canonical"]
+    assert out["_routing"]["600519.SH"] == {
+        "requested_source": "auto",
+        "preferred_source": "local_canonical",
+        "actual_source": "local_canonical",
+        "fallback": False,
+    }
+
+
+def test_auto_mode_incomplete_local_uses_one_network_source_with_reason(monkeypatch) -> None:
+    monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", "auto")
+    seen: list[str] = []
+
+    def resolver(src: str):
+        seen.append(src)
+        return _IncompleteLocalLoader if src == "local_canonical" else _StubLoader
+
+    out = fetch_market_data(
+        codes=["600519.SH"],
+        start_date="2025-01-01",
+        end_date="2026-01-02",
+        source="auto",
+        loader_resolver=resolver,
+    )
+    assert seen == ["local_canonical", "tencent"]
+    assert "600519.SH" in out
+    assert out["_routing"]["600519.SH"]["fallback"] is True
+    assert (
+        out["_routing"]["600519.SH"]["fallback_reason"]
+        == "local_coverage_incomplete"
+    )
+
+
+def test_auto_mode_falls_back_only_missing_symbol_without_cross_source_seam(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", "auto")
+    network_codes: list[str] = []
+
+    class PartialLocal:
+        name = "local_canonical"
+
+        def fetch(self, codes, start_date, end_date, interval="1D"):
+            idx = pd.to_datetime(["2026-01-01"])
+            idx.name = "trade_date"
+            return {
+                codes[0]: pd.DataFrame({"close": [1.0], "volume": [100]}, index=idx)
+            }
+
+    class RecordingNetwork(_StubLoader):
+        name = "tencent"
+
+        def fetch(self, codes, start_date, end_date, interval="1D"):
+            network_codes.extend(codes)
+            return super().fetch(codes, start_date, end_date, interval=interval)
+
+    def resolver(src: str):
+        return PartialLocal if src == "local_canonical" else RecordingNetwork
+
+    out = fetch_market_data(
+        codes=["600519.SH", "000001.SZ"],
+        start_date="2026-01-01",
+        end_date="2026-01-02",
+        source="auto",
+        loader_resolver=resolver,
+    )
+    assert network_codes == ["000001.SZ"]
+    assert out["_routing"]["600519.SH"]["actual_source"] == "local_canonical"
+    assert out["_routing"]["000001.SZ"]["actual_source"] == "tencent"
+    assert out["_routing"]["000001.SZ"]["fallback_reason"] == "local_no_data"
+
+
+def test_auto_mode_integrity_error_fails_closed_without_network(monkeypatch) -> None:
+    monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", "auto")
+    seen: list[str] = []
+
+    def resolver(src: str):
+        seen.append(src)
+        return _IntegrityLocalLoader
+
+    out = fetch_market_data(
+        codes=["600519.SH"],
+        start_date="2026-01-01",
+        end_date="2026-01-02",
+        source="auto",
+        loader_resolver=resolver,
+    )
+    assert seen == ["local_canonical"]
+    assert out["_unresolved"] == ["600519.SH"]
+    assert out["_errors"]["local_canonical"]["status"] == "integrity_error"
+
+
+def test_auto_mode_never_uses_daily_local_for_intraday(monkeypatch) -> None:
+    monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", "auto")
+    seen: list[str] = []
+
+    def resolver(src: str):
+        seen.append(src)
+        return _StubLoader
+
+    fetch_market_data(
+        codes=["600519.SH"],
+        start_date="2026-01-01",
+        end_date="2026-01-02",
+        source="auto",
+        interval="5m",
+        loader_resolver=resolver,
+    )
+    assert seen == ["tencent"]
+
+
+def test_invalid_local_mode_fails_closed_before_loader_resolution(monkeypatch) -> None:
+    monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", "sometimes")
+    with pytest.raises(ValueError, match="must be one of"):
+        local_canonical_mode()
+    out = fetch_market_data(
+        codes=["600519.SH"],
+        start_date="2026-01-01",
+        end_date="2026-01-02",
+        source="auto",
+        loader_resolver=lambda _src: pytest.fail("loader must not be resolved"),
+    )
+    assert out["_errors"]["local_canonical"]["status"] == "invalid_configuration"
+
+
 def test_fetch_loader_error_falls_through_to_unresolved() -> None:
     out = fetch_market_data(
         codes=["X.US"],
@@ -234,7 +424,8 @@ def test_fetch_missing_symbol_listed_as_unresolved() -> None:
     assert out["_unresolved"] == ["B.US"]
 
 
-def test_fetch_preserves_frame_provenance() -> None:
+def test_fetch_preserves_frame_provenance(monkeypatch) -> None:
+    monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", "explicit")
     out = fetch_market_data(
         codes=["600000.SH"],
         start_date="2026-01-01",
@@ -249,7 +440,8 @@ def test_fetch_preserves_frame_provenance() -> None:
     }
 
 
-def test_explicit_local_canonical_error_is_visible_and_unresolved() -> None:
+def test_explicit_local_canonical_error_is_visible_and_unresolved(monkeypatch) -> None:
+    monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", "explicit")
     out = fetch_market_data(
         codes=["600000.SH"],
         start_date="2026-01-01",

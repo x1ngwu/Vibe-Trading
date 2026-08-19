@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import stat
+import threading
+import time
 from copy import deepcopy
 from datetime import date
 from pathlib import Path, PurePosixPath
@@ -25,6 +28,11 @@ DEFAULT_CATALOG = Path(
 )
 DEFAULT_CANONICAL_ROOT = Path("/var/lib/vibe-trading/market-data/canonical")
 MAX_SYMBOLS = 128
+MAX_CONCURRENT_QUERIES = 1
+DEFAULT_QUEUE_TIMEOUT_SECONDS = 1.0
+DEFAULT_QUERY_TIMEOUT_SECONDS = 60.0
+MAX_QUEUE_TIMEOUT_SECONDS = 30.0
+MAX_QUERY_TIMEOUT_SECONDS = 300.0
 _SYMBOL_RE = re.compile(r"^[0-9]{6}\.(?:SH|SZ|BJ)$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _OPERATIONAL_MANIFEST_FIELDS = {
@@ -55,6 +63,143 @@ class LocalCanonicalIncompleteError(LocalCanonicalError):
 
 class LocalCanonicalDuplicateError(LocalCanonicalIntegrityError):
     status = "duplicate_conflict"
+
+
+class LocalCanonicalBusyError(LocalCanonicalError):
+    status = "resource_busy"
+
+
+class LocalCanonicalCancelledError(LocalCanonicalError):
+    status = "cancelled"
+
+
+class LocalCanonicalQueryTimeoutError(LocalCanonicalError):
+    status = "query_timeout"
+
+
+def _bounded_seconds(
+    value: float | None,
+    *,
+    env_name: str,
+    default: float,
+    maximum: float,
+) -> float:
+    raw: object = value if value is not None else os.getenv(env_name, str(default))
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{env_name} must be a number") from exc
+    if not math.isfinite(seconds) or seconds < 0 or seconds > maximum:
+        raise ValueError(f"{env_name} must be between 0 and {maximum:g} seconds")
+    return seconds
+
+
+class _QueryGovernor:
+    """Process-local permit gate that can be cancelled while waiting."""
+
+    def __init__(self, limit: int) -> None:
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+            raise ValueError("local canonical query limit must be a positive integer")
+        self.limit = limit
+        self._semaphore = threading.BoundedSemaphore(limit)
+
+    def acquire(
+        self,
+        *,
+        timeout_seconds: float,
+        cancel_event: threading.Event | None,
+    ) -> None:
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                raise LocalCanonicalCancelledError(
+                    "local canonical query was cancelled before execution"
+                )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                if self._semaphore.acquire(blocking=False):
+                    return
+                raise LocalCanonicalBusyError(
+                    "local canonical query capacity is busy; retry later"
+                )
+            if self._semaphore.acquire(timeout=min(remaining, 0.05)):
+                return
+
+    def release(self) -> None:
+        self._semaphore.release()
+
+
+_PROCESS_QUERY_GOVERNOR = _QueryGovernor(MAX_CONCURRENT_QUERIES)
+
+
+class _QueryWatchdog:
+    """Interrupt one DuckDB connection on timeout or cooperative cancellation."""
+
+    def __init__(
+        self,
+        connection: duckdb.DuckDBPyConnection,
+        *,
+        timeout_seconds: float,
+        cancel_event: threading.Event | None,
+    ) -> None:
+        self._connection = connection
+        self._cancel_event = cancel_event
+        self._deadline = time.monotonic() + timeout_seconds
+        self._done = threading.Event()
+        self._lock = threading.Lock()
+        self._reason: str | None = None
+        self._thread = threading.Thread(
+            target=self._watch,
+            name="local-canonical-query-watchdog",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._done.set()
+        self._thread.join(timeout=1.0)
+        if self._thread.is_alive():
+            raise LocalCanonicalIntegrityError(
+                "local canonical query watchdog did not stop"
+            )
+
+    def _interrupt(self, reason: str) -> None:
+        with self._lock:
+            if self._reason is not None or self._done.is_set():
+                return
+            self._reason = reason
+        try:
+            self._connection.interrupt()
+        except duckdb.Error:
+            # The query may have completed between the reason being recorded and
+            # interrupt(). The caller still observes the recorded terminal state.
+            pass
+
+    def _watch(self) -> None:
+        while not self._done.is_set():
+            if self._cancel_event is not None and self._cancel_event.is_set():
+                self._interrupt("cancelled")
+                return
+            remaining = self._deadline - time.monotonic()
+            if remaining <= 0:
+                self._interrupt("query_timeout")
+                return
+            self._done.wait(min(remaining, 0.05))
+
+    def raise_if_stopped(self) -> None:
+        with self._lock:
+            reason = self._reason
+            if reason is None and time.monotonic() >= self._deadline:
+                self._reason = "query_timeout"
+                reason = self._reason
+        if reason == "cancelled":
+            raise LocalCanonicalCancelledError("local canonical query was cancelled")
+        if reason == "query_timeout":
+            raise LocalCanonicalQueryTimeoutError(
+                "local canonical query exceeded its execution timeout"
+            )
 
 
 def _canonical_json(value: Any) -> str:
@@ -280,12 +425,28 @@ class DataLoader:
         *,
         catalog_path: Path | None = None,
         canonical_root: Path | None = None,
+        query_governor: _QueryGovernor | None = None,
+        queue_timeout_seconds: float | None = None,
+        query_timeout_seconds: float | None = None,
     ) -> None:
         self._catalog_path = catalog_path or Path(
             os.getenv("VIBE_LOCAL_CANONICAL_CATALOG", str(DEFAULT_CATALOG))
         )
         self._canonical_root = canonical_root or Path(
             os.getenv("VIBE_LOCAL_CANONICAL_ROOT", str(DEFAULT_CANONICAL_ROOT))
+        )
+        self._query_governor = query_governor or _PROCESS_QUERY_GOVERNOR
+        self._queue_timeout_seconds = _bounded_seconds(
+            queue_timeout_seconds,
+            env_name="VIBE_LOCAL_CANONICAL_QUEUE_TIMEOUT_SECONDS",
+            default=DEFAULT_QUEUE_TIMEOUT_SECONDS,
+            maximum=MAX_QUEUE_TIMEOUT_SECONDS,
+        )
+        self._query_timeout_seconds = _bounded_seconds(
+            query_timeout_seconds,
+            env_name="VIBE_LOCAL_CANONICAL_QUERY_TIMEOUT_SECONDS",
+            default=DEFAULT_QUERY_TIMEOUT_SECONDS,
+            maximum=MAX_QUERY_TIMEOUT_SECONDS,
         )
 
     def _dataset(self) -> _Dataset:
@@ -306,6 +467,7 @@ class DataLoader:
         *,
         interval: str = "1D",
         fields: Optional[List[str]] = None,
+        cancel_event: threading.Event | None = None,
     ) -> Dict[str, pd.DataFrame]:
         if interval != "1D":
             raise LocalCanonicalUnsupportedError("local canonical supports only interval=1D")
@@ -344,25 +506,77 @@ class DataLoader:
             )
         paths = [str(dataset.files_by_year[year]) for year in years]
 
+        self._query_governor.acquire(
+            timeout_seconds=self._queue_timeout_seconds,
+            cancel_event=cancel_event,
+        )
+        try:
+            frame = self._query_frame(
+                paths=paths,
+                symbols=normalized,
+                start=start,
+                end=end,
+                cancel_event=cancel_event,
+            )
+            result: Dict[str, pd.DataFrame] = {}
+            provenance = dataset.provenance
+            for symbol in normalized:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise LocalCanonicalCancelledError(
+                        "local canonical query result processing was cancelled"
+                    )
+                selected = frame[frame["ts_code"] == symbol].copy()
+                if selected.empty:
+                    continue
+                selected = selected.drop(columns=["ts_code"]).set_index("trade_date")
+                selected.index = pd.DatetimeIndex(selected.index, name="trade_date")
+                for column in ("open", "high", "low", "close", "volume"):
+                    selected[column] = selected[column].astype("float64")
+                selected.attrs["provenance"] = deepcopy(provenance)
+                result[symbol] = selected
+            return result
+        finally:
+            self._query_governor.release()
+
+    def _query_frame(
+        self,
+        *,
+        paths: list[str],
+        symbols: list[str],
+        start: date,
+        end: date,
+        cancel_event: threading.Event | None,
+    ) -> pd.DataFrame:
         try:
             connection = duckdb.connect(":memory:")
         except duckdb.Error as exc:
-            raise LocalCanonicalIntegrityError("canonical query engine is unavailable") from exc
+            raise LocalCanonicalIntegrityError(
+                "canonical query engine is unavailable"
+            ) from exc
+
+        watchdog = _QueryWatchdog(
+            connection,
+            timeout_seconds=self._query_timeout_seconds,
+            cancel_event=cancel_event,
+        )
+        watchdog.start()
         try:
+            watchdog.raise_if_stopped()
             connection.execute("SET threads=2")
             connection.execute("SET memory_limit='512MB'")
             connection.execute("SET max_temp_directory_size='0B'")
-            parameters: list[Any] = [paths, normalized, start.isoformat(), end.isoformat()]
+            parameters: list[Any] = [paths, symbols, start.isoformat(), end.isoformat()]
             base_predicate = (
                 "FROM read_parquet(?) "
                 "WHERE ts_code IN (SELECT unnest(?::VARCHAR[])) "
                 "AND trade_date BETWEEN ?::DATE AND ?::DATE"
             )
             duplicate = connection.execute(
-                "SELECT ts_code, trade_date, count(*) " + base_predicate +
-                " GROUP BY ts_code, trade_date HAVING count(*) > 1 LIMIT 1",
+                "SELECT ts_code, trade_date, count(*) " + base_predicate
+                + " GROUP BY ts_code, trade_date HAVING count(*) > 1 LIMIT 1",
                 parameters,
             ).fetchone()
+            watchdog.raise_if_stopped()
             if duplicate is not None:
                 raise LocalCanonicalDuplicateError(
                     f"conflicting natural key: {duplicate[0]}/{duplicate[1]}"
@@ -374,23 +588,15 @@ class DataLoader:
                 + " ORDER BY ts_code, trade_date",
                 parameters,
             ).df()
+            watchdog.raise_if_stopped()
+            return frame
         except LocalCanonicalError:
             raise
         except duckdb.Error as exc:
+            watchdog.raise_if_stopped()
             raise LocalCanonicalIntegrityError("canonical query failed") from exc
         finally:
-            connection.close()
-
-        result: Dict[str, pd.DataFrame] = {}
-        provenance = dataset.provenance
-        for symbol in normalized:
-            selected = frame[frame["ts_code"] == symbol].copy()
-            if selected.empty:
-                continue
-            selected = selected.drop(columns=["ts_code"]).set_index("trade_date")
-            selected.index = pd.DatetimeIndex(selected.index, name="trade_date")
-            for column in ("open", "high", "low", "close", "volume"):
-                selected[column] = selected[column].astype("float64")
-            selected.attrs["provenance"] = deepcopy(provenance)
-            result[symbol] = selected
-        return result
+            try:
+                watchdog.stop()
+            finally:
+                connection.close()

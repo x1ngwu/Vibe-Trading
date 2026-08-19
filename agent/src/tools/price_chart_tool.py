@@ -11,7 +11,14 @@ from typing import Any
 
 from backtest.loaders.registry import FALLBACK_CHAINS
 from src.agent.tools import BaseTool
-from src.market_data import YAHOO_INDEX_SYMBOLS, detect_source, fetch_market_data, get_loader
+from src.market_data import (
+    YAHOO_INDEX_SYMBOLS,
+    LocalCanonicalDisabledError,
+    detect_source,
+    fetch_market_data,
+    get_loader,
+    local_canonical_mode,
+)
 from src.tools.path_utils import safe_path, safe_run_dir
 
 
@@ -362,7 +369,20 @@ def _effective_fetch_start(
     return max(requested, budget_start).isoformat()
 
 
-def _preferred_source(symbol: str, interval: str, start_date: str, end_date: str) -> str:
+def _preferred_source(
+    symbol: str,
+    interval: str,
+    start_date: str,
+    end_date: str,
+    *,
+    local_mode: str,
+) -> str:
+    if (
+        local_mode == "auto"
+        and interval == "1D"
+        and symbol.endswith((".SH", ".SZ", ".BJ"))
+    ):
+        return "local_canonical"
     if symbol.endswith(".BJ"):
         return "eastmoney"
     if symbol.endswith((".SH", ".SZ")):
@@ -458,6 +478,17 @@ class PriceChartTool(BaseTool):
             kwargs.get("start_date"), kwargs.get("end_date"), interval
         )
 
+        requested_source = str(kwargs.get("source") or "auto").strip().lower()
+        local_mode = (
+            local_canonical_mode()
+            if requested_source in {"auto", "local_canonical"}
+            else "disabled"
+        )
+        if requested_source == "local_canonical" and local_mode == "disabled":
+            raise LocalCanonicalDisabledError(
+                "local canonical source is disabled by VIBE_LOCAL_CANONICAL_MODE"
+            )
+
         run_dir_raw = str(kwargs.get("run_dir") or "").strip()
         if not run_dir_raw:
             raise ValueError("run_dir is required")
@@ -465,12 +496,12 @@ class PriceChartTool(BaseTool):
         output_dir = safe_path("artifacts/visualizations", run_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        requested_source = str(kwargs.get("source") or "auto").strip().lower()
         allow_fallback = requested_source == "auto"
         data: dict[str, Any] = {}
         unresolved: set[str] = set()
         source_by_symbol: dict[str, str] = {}
         provenance_by_symbol: dict[str, dict[str, Any]] = {}
+        fallback_reason_by_symbol: dict[str, str] = {}
         fetch_start_by_symbol: dict[str, str] = {}
         source_attempts: dict[str, list[dict[str, str]]] = {
             symbol: [] for symbol in codes
@@ -480,7 +511,13 @@ class PriceChartTool(BaseTool):
             preferred_source = (
                 requested_source
                 if not allow_fallback
-                else _preferred_source(symbol, interval, start_date, end_date)
+                else _preferred_source(
+                    symbol,
+                    interval,
+                    start_date,
+                    end_date,
+                    local_mode=local_mode,
+                )
             )
             candidates = _candidate_sources(
                 symbol, preferred_source, allow_fallback=allow_fallback
@@ -501,6 +538,8 @@ class PriceChartTool(BaseTool):
                     source_attempts[symbol].append(
                         {"source": candidate, "status": "unavailable"}
                     )
+                    if candidate == "local_canonical":
+                        break
                     continue
 
                 if actual_source in tried_actual_sources:
@@ -539,6 +578,13 @@ class PriceChartTool(BaseTool):
                         source_error.get("status", "unavailable")
                     )
                     source_attempts[symbol].append(attempt)
+                    if actual_source == "local_canonical":
+                        if attempt["status"] == "incomplete":
+                            fallback_reason_by_symbol[symbol] = (
+                                "local_coverage_incomplete"
+                            )
+                            continue
+                        break
                     continue
                 candidate_rows = (
                     source_data.get(symbol) if isinstance(source_data, dict) else None
@@ -546,6 +592,8 @@ class PriceChartTool(BaseTool):
                 normalized_bars, _, _ = _normalize_bars(candidate_rows, interval)
                 if not normalized_bars:
                     source_attempts[symbol].append(attempt)
+                    if actual_source == "local_canonical":
+                        fallback_reason_by_symbol[symbol] = "local_no_data"
                     continue
 
                 attempt["status"] = "success"
@@ -556,6 +604,8 @@ class PriceChartTool(BaseTool):
                 candidate_provenance = source_data.get("_provenance", {}).get(symbol)
                 if isinstance(candidate_provenance, dict):
                     provenance_by_symbol[symbol] = candidate_provenance
+                if actual_source != preferred_source and symbol not in fallback_reason_by_symbol:
+                    fallback_reason_by_symbol[symbol] = "preferred_source_unavailable"
                 break
             else:
                 unresolved.add(symbol)
@@ -578,6 +628,7 @@ class PriceChartTool(BaseTool):
 
             actual_source = source_by_symbol[symbol]
             source_provenance = provenance_by_symbol.get(symbol, {})
+            fallback_reason = fallback_reason_by_symbol.get(symbol)
             effective_fetch_start = fetch_start_by_symbol[symbol]
             range_truncated = effective_fetch_start > start_date
             truncated = row_truncated or range_truncated
@@ -617,6 +668,9 @@ class PriceChartTool(BaseTool):
                 payload["completeness"] = source_provenance.get("completeness")
                 payload["fallback"] = source_provenance.get("fallback")
                 payload["warnings"] = source_provenance.get("warnings", [])
+            if fallback_reason:
+                payload["fallback"] = True
+                payload["fallback_reason"] = fallback_reason
             _write_json(output_dir / f"{visualization_id}.json", payload)
 
             spec = {
@@ -646,6 +700,7 @@ class PriceChartTool(BaseTool):
                 "units",
                 "completeness",
                 "fallback",
+                "fallback_reason",
                 "warnings",
             ):
                 if key in payload:

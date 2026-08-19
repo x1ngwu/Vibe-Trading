@@ -126,6 +126,7 @@ def test_price_chart_tool_persists_compact_manifest(monkeypatch, tmp_path) -> No
 
 
 def test_price_chart_exposes_local_canonical_provenance(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", "explicit")
     provenance = {
         "source": "local_canonical",
         "provider": "vendor_a",
@@ -178,6 +179,204 @@ def test_price_chart_exposes_local_canonical_provenance(monkeypatch, tmp_path) -
     assert spec["watermark"] == "2026-08-14"
     assert spec["completeness"] == "complete"
     assert spec["fallback"] is False
+
+
+def test_price_chart_disabled_mode_rejects_explicit_local_before_artifact_write(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", "disabled")
+    monkeypatch.setattr(price_chart_tool, "safe_run_dir", lambda _value: tmp_path)
+    with pytest.raises(price_chart_tool.LocalCanonicalDisabledError):
+        price_chart_tool.PriceChartTool().execute(
+            codes=["600519.SH"],
+            source="local_canonical",
+            interval="1D",
+            run_dir="ignored-in-test",
+        )
+    assert not (tmp_path / "artifacts").exists()
+
+
+@pytest.mark.parametrize("mode", ["disabled", "explicit"])
+def test_price_chart_auto_keeps_network_route_until_auto_mode(
+    monkeypatch, tmp_path, mode: str
+) -> None:
+    monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", mode)
+    seen: list[str] = []
+
+    def fake_get_loader(source: str):
+        seen.append(source)
+        return _TencentLoader
+
+    def fake_fetch(**_kwargs):
+        return {
+            "600519.SH": [
+                {
+                    "trade_date": "2026-08-14",
+                    "open": 10,
+                    "high": 12,
+                    "low": 9,
+                    "close": 11,
+                    "volume": 100,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(price_chart_tool, "safe_run_dir", lambda _value: tmp_path)
+    monkeypatch.setattr(price_chart_tool, "get_loader", fake_get_loader)
+    monkeypatch.setattr(price_chart_tool, "fetch_market_data", fake_fetch)
+    result = json.loads(
+        price_chart_tool.PriceChartTool().execute(
+            codes=["600519.SH"],
+            start_date="2026-08-14",
+            end_date="2026-08-14",
+            source="auto",
+            interval="1D",
+            run_dir="ignored-in-test",
+        )
+    )
+    assert result["status"] == "ok"
+    assert seen == ["tencent"]
+
+
+def test_price_chart_auto_mode_prefers_local_daily(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", "auto")
+    seen: list[str] = []
+
+    def fake_get_loader(source: str):
+        seen.append(source)
+        return _LocalCanonicalLoader
+
+    def fake_fetch(**_kwargs):
+        return {
+            "600519.SH": [
+                {
+                    "trade_date": "2026-08-14",
+                    "open": 10,
+                    "high": 12,
+                    "low": 9,
+                    "close": 11,
+                    "volume": 100,
+                }
+            ],
+            "_provenance": {
+                "600519.SH": {
+                    "source": "local_canonical",
+                    "provider": "vendor_a",
+                    "adjustment": {"price_basis": "raw"},
+                    "fallback": False,
+                }
+            },
+        }
+
+    monkeypatch.setattr(price_chart_tool, "safe_run_dir", lambda _value: tmp_path)
+    monkeypatch.setattr(price_chart_tool, "get_loader", fake_get_loader)
+    monkeypatch.setattr(price_chart_tool, "fetch_market_data", fake_fetch)
+    result = json.loads(
+        price_chart_tool.PriceChartTool().execute(
+            codes=["600519.SH"],
+            start_date="2026-08-14",
+            end_date="2026-08-14",
+            source="auto",
+            interval="1D",
+            run_dir="ignored-in-test",
+        )
+    )
+    assert result["status"] == "ok"
+    assert seen == ["local_canonical"]
+    assert result["visualizations"][0]["source"] == "local_canonical"
+    assert result["visualizations"][0]["fallback"] is False
+
+
+def test_price_chart_auto_incomplete_local_falls_back_whole_symbol(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", "auto")
+    seen: list[str] = []
+
+    def fake_get_loader(source: str):
+        seen.append(source)
+        return _LocalCanonicalLoader if source == "local_canonical" else _TencentLoader
+
+    def fake_fetch(**kwargs):
+        if kwargs["source"] == "local_canonical":
+            return {
+                "_unresolved": ["600519.SH"],
+                "_errors": {
+                    "local_canonical": {
+                        "status": "incomplete",
+                        "detail": "outside canonical coverage",
+                    }
+                },
+            }
+        return {
+            "600519.SH": [
+                {
+                    "trade_date": "2026-08-14",
+                    "open": 10,
+                    "high": 12,
+                    "low": 9,
+                    "close": 11,
+                    "volume": 100,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(price_chart_tool, "safe_run_dir", lambda _value: tmp_path)
+    monkeypatch.setattr(price_chart_tool, "get_loader", fake_get_loader)
+    monkeypatch.setattr(price_chart_tool, "fetch_market_data", fake_fetch)
+    result = json.loads(
+        price_chart_tool.PriceChartTool().execute(
+            codes=["600519.SH"],
+            start_date="2025-01-01",
+            end_date="2026-08-14",
+            source="auto",
+            interval="1D",
+            run_dir="ignored-in-test",
+        )
+    )
+    assert result["status"] == "ok"
+    assert seen[:2] == ["local_canonical", "tencent"]
+    spec = result["visualizations"][0]
+    assert spec["source"] == "tencent"
+    assert spec["fallback"] is True
+    assert spec["fallback_reason"] == "local_coverage_incomplete"
+
+
+def test_price_chart_auto_integrity_error_does_not_try_network(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", "auto")
+    seen: list[str] = []
+
+    def fake_get_loader(source: str):
+        seen.append(source)
+        return _LocalCanonicalLoader
+
+    def fake_fetch(**_kwargs):
+        return {
+            "_unresolved": ["600519.SH"],
+            "_errors": {
+                "local_canonical": {
+                    "status": "integrity_error",
+                    "detail": "manifest mismatch",
+                }
+            },
+        }
+
+    monkeypatch.setattr(price_chart_tool, "safe_run_dir", lambda _value: tmp_path)
+    monkeypatch.setattr(price_chart_tool, "get_loader", fake_get_loader)
+    monkeypatch.setattr(price_chart_tool, "fetch_market_data", fake_fetch)
+    result = json.loads(
+        price_chart_tool.PriceChartTool().execute(
+            codes=["600519.SH"],
+            start_date="2026-08-14",
+            end_date="2026-08-14",
+            source="auto",
+            interval="1D",
+            run_dir="ignored-in-test",
+        )
+    )
+    assert result["status"] == "error"
+    assert seen == ["local_canonical"]
+    assert result["source_attempts"]["600519.SH"] == [
+        {"source": "local_canonical", "status": "integrity_error"}
+    ]
 
 
 @pytest.mark.parametrize(

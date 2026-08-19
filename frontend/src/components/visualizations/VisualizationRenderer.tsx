@@ -107,7 +107,34 @@ function isAbortError(reason: unknown): boolean {
 }
 
 function metadataLabel(spec: CandlestickVisualizationSpec): string {
-  return [spec.source, spec.adjustment, spec.timeframe, spec.timezone].filter(Boolean).join(" · ");
+  const provider = spec.provider_version
+    ? `${spec.provider || "provider"}@${spec.provider_version}`
+    : spec.provider;
+  const canonical = spec.canonical_version
+    ? `canonical ${spec.canonical_version.slice(0, 12)}`
+    : undefined;
+  const watermark = spec.watermark ? `through ${spec.watermark}` : undefined;
+  const volumeUnitRaw = spec.units?.volume ?? spec.units?.vol;
+  const volumeUnit = typeof volumeUnitRaw === "string"
+    ? volumeUnitRaw
+    : volumeUnitRaw && typeof volumeUnitRaw === "object" && "value" in volumeUnitRaw
+      ? String(volumeUnitRaw.value)
+      : undefined;
+  return [
+    spec.source,
+    provider,
+    canonical,
+    spec.adjustment,
+    spec.timeframe,
+    spec.timezone,
+    watermark,
+    volumeUnit ? `volume ${volumeUnit}` : undefined,
+    spec.completeness,
+  ].filter(Boolean).join(" · ");
+}
+
+function humanizeStatus(value?: string): string | undefined {
+  return value?.split("_").join(" ");
 }
 
 function formatPrice(value: number): string {
@@ -197,6 +224,16 @@ function ChartPanel({ runId, spec }: ChartPanelProps) {
             <span>dropped {spec.dropped_bar_count} invalid/duplicate bars</span>
           )}
         </div>
+        {spec.fallback && (
+          <div className="mt-1 text-[10px] text-amber-600 dark:text-amber-400" role="status">
+            Fallback source used{spec.fallback_reason ? `: ${humanizeStatus(spec.fallback_reason)}` : ""}
+          </div>
+        )}
+        {spec.warnings && spec.warnings.length > 0 && (
+          <div className="mt-1 text-[10px] text-amber-600 dark:text-amber-400">
+            Data warning: {spec.warnings.join("; ")}
+          </div>
+        )}
         {chartData?.bars.length ? (() => {
           const latest = chartData.bars[chartData.bars.length - 1];
           const previous = chartData.bars.length > 1 ? chartData.bars[chartData.bars.length - 2] : undefined;

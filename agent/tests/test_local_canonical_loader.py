@@ -6,17 +6,25 @@ import hashlib
 import json
 import shutil
 import tempfile
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
+from backtest.loaders import local_canonical_loader as loader_module
 from backtest.loaders.base import NoAvailableSourceError
 from backtest.loaders.local_canonical_loader import (
     DataLoader,
+    LocalCanonicalBusyError,
+    LocalCanonicalCancelledError,
     LocalCanonicalDuplicateError,
     LocalCanonicalIncompleteError,
     LocalCanonicalIntegrityError,
+    LocalCanonicalQueryTimeoutError,
     LocalCanonicalUnsupportedError,
+    _QueryGovernor,
     _canonical_version,
 )
 from backtest.loaders.registry import get_loader_cls_with_fallback
@@ -25,6 +33,7 @@ from src.market_data import fetch_market_data
 
 OUTER_ROOT = Path(__file__).resolve().parents[3]
 FIXTURE = OUTER_ROOT / "tests" / "fixtures" / "canonical_daily_v1"
+QUERY_COLUMNS = ["ts_code", "trade_date", "open", "high", "low", "close", "volume"]
 
 
 def _read_json(path: Path) -> dict:
@@ -63,6 +72,21 @@ class TestLocalCanonicalLoader:
         return DataLoader(
             catalog_path=self.catalog_path,
             canonical_root=self.canonical_root,
+        )
+
+    def governed_loader(
+        self,
+        governor: _QueryGovernor,
+        *,
+        queue_timeout_seconds: float = 0.1,
+        query_timeout_seconds: float = 1.0,
+    ) -> DataLoader:
+        return DataLoader(
+            catalog_path=self.catalog_path,
+            canonical_root=self.canonical_root,
+            query_governor=governor,
+            queue_timeout_seconds=queue_timeout_seconds,
+            query_timeout_seconds=query_timeout_seconds,
         )
 
     def test_reads_sh_sz_bj_and_cross_year_with_provenance(self) -> None:
@@ -108,6 +132,7 @@ class TestLocalCanonicalLoader:
     def test_get_market_data_explicit_source_returns_rows_and_provenance(
         self, monkeypatch
     ) -> None:
+        monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", "explicit")
         monkeypatch.setenv("VIBE_LOCAL_CANONICAL_CATALOG", str(self.catalog_path))
         monkeypatch.setenv("VIBE_LOCAL_CANONICAL_ROOT", str(self.canonical_root))
         result = fetch_market_data(
@@ -221,3 +246,156 @@ class TestLocalCanonicalLoader:
 
         with pytest.raises(LocalCanonicalDuplicateError, match="600000.SH"):
             self.loader().fetch(["600000.SH"], "2026-01-05", "2026-01-05")
+
+    def test_concurrency_limit_fails_busy_before_starting_second_query(self) -> None:
+        governor = _QueryGovernor(1)
+        first = self.governed_loader(governor)
+        second = self.governed_loader(governor, queue_timeout_seconds=0.02)
+        query_started = threading.Event()
+        release_query = threading.Event()
+        second_query_started = threading.Event()
+
+        def blocking_query(**_kwargs):
+            query_started.set()
+            assert release_query.wait(timeout=1.0)
+            return loader_module.pd.DataFrame(columns=QUERY_COLUMNS)
+
+        def unexpected_query(**_kwargs):
+            second_query_started.set()
+            return loader_module.pd.DataFrame(columns=QUERY_COLUMNS)
+
+        first._query_frame = blocking_query  # type: ignore[method-assign]
+        second._query_frame = unexpected_query  # type: ignore[method-assign]
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            running = executor.submit(
+                first.fetch, ["600000.SH"], "2025-12-30", "2025-12-30"
+            )
+            assert query_started.wait(timeout=1.0)
+            with pytest.raises(LocalCanonicalBusyError) as caught:
+                second.fetch(["000001.SZ"], "2025-12-30", "2025-12-30")
+            assert caught.value.status == "resource_busy"
+            assert not second_query_started.is_set()
+            release_query.set()
+            assert running.result(timeout=1.0) == {}
+
+    def test_running_query_cancellation_interrupts_closes_and_releases(self, monkeypatch) -> None:
+        governor = _QueryGovernor(1)
+        loader = self.governed_loader(governor)
+        query_started = threading.Event()
+        interrupted = threading.Event()
+        closed = threading.Event()
+
+        class BlockingConnection:
+            def execute(self, sql, _parameters=None):
+                if sql.startswith("SET "):
+                    return self
+                query_started.set()
+                assert interrupted.wait(timeout=1.0)
+                raise loader_module.duckdb.InterruptException("query interrupted")
+
+            def fetchone(self):
+                raise AssertionError("interrupted query must not fetch a row")
+
+            def interrupt(self):
+                interrupted.set()
+
+            def close(self):
+                closed.set()
+
+        monkeypatch.setattr(loader_module.duckdb, "connect", lambda _path: BlockingConnection())
+        cancel_event = threading.Event()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            running = executor.submit(
+                loader.fetch,
+                ["600000.SH"],
+                "2025-12-30",
+                "2025-12-30",
+                cancel_event=cancel_event,
+            )
+            assert query_started.wait(timeout=1.0)
+            cancel_event.set()
+            with pytest.raises(LocalCanonicalCancelledError) as caught:
+                running.result(timeout=1.0)
+        assert caught.value.status == "cancelled"
+        assert interrupted.is_set()
+        assert closed.is_set()
+
+        replacement = self.governed_loader(governor, queue_timeout_seconds=0)
+        replacement._query_frame = (  # type: ignore[method-assign]
+            lambda **_kwargs: loader_module.pd.DataFrame(columns=QUERY_COLUMNS)
+        )
+        assert replacement.fetch(
+            ["600000.SH"], "2025-12-30", "2025-12-30"
+        ) == {}
+
+    def test_queued_query_can_be_cancelled_without_entering_duckdb(self) -> None:
+        governor = _QueryGovernor(1)
+        first = self.governed_loader(governor)
+        second = self.governed_loader(governor, queue_timeout_seconds=1.0)
+        first_started = threading.Event()
+        release_first = threading.Event()
+        second_started = threading.Event()
+        cancel_event = threading.Event()
+
+        def blocking_query(**_kwargs):
+            first_started.set()
+            assert release_first.wait(timeout=1.0)
+            return loader_module.pd.DataFrame(columns=QUERY_COLUMNS)
+
+        def unexpected_query(**_kwargs):
+            second_started.set()
+            return loader_module.pd.DataFrame(columns=QUERY_COLUMNS)
+
+        first._query_frame = blocking_query  # type: ignore[method-assign]
+        second._query_frame = unexpected_query  # type: ignore[method-assign]
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            running = executor.submit(
+                first.fetch, ["600000.SH"], "2025-12-30", "2025-12-30"
+            )
+            assert first_started.wait(timeout=1.0)
+            waiting = executor.submit(
+                second.fetch,
+                ["000001.SZ"],
+                "2025-12-30",
+                "2025-12-30",
+                cancel_event=cancel_event,
+            )
+            time.sleep(0.06)
+            cancel_event.set()
+            with pytest.raises(LocalCanonicalCancelledError):
+                waiting.result(timeout=1.0)
+            assert not second_started.is_set()
+            release_first.set()
+            assert running.result(timeout=1.0) == {}
+
+    def test_query_timeout_interrupts_closes_and_has_stable_status(self, monkeypatch) -> None:
+        governor = _QueryGovernor(1)
+        loader = self.governed_loader(governor, query_timeout_seconds=0.02)
+        interrupted = threading.Event()
+        closed = threading.Event()
+
+        class BlockingConnection:
+            def execute(self, sql, _parameters=None):
+                if sql.startswith("SET "):
+                    return self
+                assert interrupted.wait(timeout=1.0)
+                raise loader_module.duckdb.InterruptException("query interrupted")
+
+            def fetchone(self):
+                raise AssertionError("timed out query must not fetch a row")
+
+            def interrupt(self):
+                interrupted.set()
+
+            def close(self):
+                closed.set()
+
+        monkeypatch.setattr(loader_module.duckdb, "connect", lambda _path: BlockingConnection())
+        started = time.monotonic()
+        with pytest.raises(LocalCanonicalQueryTimeoutError) as caught:
+            loader.fetch(["600000.SH"], "2025-12-30", "2025-12-30")
+        assert time.monotonic() - started < 0.5
+        assert caught.value.status == "query_timeout"
+        assert interrupted.is_set()
+        assert closed.is_set()

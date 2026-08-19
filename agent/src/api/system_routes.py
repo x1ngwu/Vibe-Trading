@@ -157,6 +157,28 @@ def _provider_readiness() -> Tuple[bool, str]:
     return True, "ready"
 
 
+def _local_canonical_readiness() -> Tuple[bool, str]:
+    """Validate enabled local canonical state without opening Parquet data."""
+    try:
+        from src.market_data import get_loader, local_canonical_mode
+
+        mode = local_canonical_mode()
+    except Exception as exc:  # noqa: BLE001 - readiness must fail closed
+        logger.warning("readiness: local canonical mode invalid: %r", exc)
+        return False, "local canonical configuration invalid"
+    if mode == "disabled":
+        return True, "disabled"
+    try:
+        loader_cls = get_loader("local_canonical")
+        loader = loader_cls()
+        if not loader.is_available():
+            return False, "local canonical data unavailable"
+    except Exception as exc:  # noqa: BLE001 - return a non-sensitive diagnosis
+        logger.warning("readiness: local canonical probe failed: %r", exc)
+        return False, "local canonical data unavailable"
+    return True, "ready"
+
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -231,6 +253,12 @@ def register_system_routes(
         ready, reason = _provider_readiness()
         if not ready:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=reason)
+        local_ready, local_reason = _local_canonical_readiness()
+        if not local_ready:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=local_reason,
+            )
         return {
             "status": "ready",
             "service": "Vibe-Trading API",
