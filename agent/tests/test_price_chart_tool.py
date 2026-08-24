@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import date, datetime, timedelta
 
@@ -109,6 +110,7 @@ def test_price_chart_tool_persists_compact_manifest(monkeypatch, tmp_path) -> No
     assert calls["codes"] == ["600519.SH"]
     assert calls["source"] == "tencent"
     assert calls["max_rows"] == 0
+    assert calls["emit_observation"] is False
 
     spec = result["visualizations"][0]
     assert spec["source"] == "tencent"
@@ -338,6 +340,80 @@ def test_price_chart_auto_incomplete_local_falls_back_whole_symbol(monkeypatch, 
     assert spec["source"] == "tencent"
     assert spec["fallback"] is True
     assert spec["fallback_reason"] == "local_coverage_incomplete"
+
+
+def test_price_chart_auto_observation_aggregates_attempts_without_symbols(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", "auto")
+
+    def fake_get_loader(source: str):
+        return _LocalCanonicalLoader if source == "local_canonical" else _TencentLoader
+
+    def fake_fetch(**kwargs):
+        if kwargs["source"] == "local_canonical":
+            return {
+                "_unresolved": ["600519.SH"],
+                "_errors": {
+                    "local_canonical": {
+                        "status": "incomplete",
+                        "detail": "outside canonical coverage",
+                    }
+                },
+            }
+        return {
+            "600519.SH": [
+                {
+                    "trade_date": "2026-08-14",
+                    "open": 10,
+                    "high": 12,
+                    "low": 9,
+                    "close": 11,
+                    "volume": 100,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(price_chart_tool, "safe_run_dir", lambda _value: tmp_path)
+    monkeypatch.setattr(price_chart_tool, "get_loader", fake_get_loader)
+    monkeypatch.setattr(price_chart_tool, "fetch_market_data", fake_fetch)
+    with caplog.at_level(logging.INFO, logger="src.market_data"):
+        result = json.loads(
+            price_chart_tool.PriceChartTool().execute(
+                codes=["600519.SH"],
+                start_date="2025-01-01",
+                end_date="2026-08-14",
+                source="auto",
+                interval="1D",
+                run_dir="ignored-in-test",
+            )
+        )
+
+    assert result["status"] == "ok"
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("market_data_routing_summary ")
+    ]
+    assert len(messages) == 1
+    event = json.loads(messages[0].split(" ", 1)[1])
+    assert event["operation"] == "show_price_chart"
+    assert event["local_mode"] == "auto"
+    assert event["symbol_count"] == event["resolved_count"] == 1
+    assert event["local_count"] == 0
+    assert event["network_count"] == 1
+    assert event["fallback_count"] == 1
+    assert event["actual_source_counts"] == {"tencent": 1}
+    assert event["fallback_reason_counts"] == {"local_coverage_incomplete": 1}
+    assert event["attempt_source_counts"] == {
+        "local_canonical": 1,
+        "tencent": 1,
+    }
+    assert event["attempt_status_counts"] == {"incomplete": 1, "success": 1}
+    assert event["error_status_counts"] == {"incomplete": 1}
+    assert "600519" not in caplog.text
+    assert "2025-01-01" not in caplog.text
+    assert "2026-08-14" not in caplog.text
 
 
 def test_price_chart_auto_integrity_error_does_not_try_network(monkeypatch, tmp_path) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from src.market_data import (
     YAHOO_INDEX_SYMBOLS,
     LocalCanonicalDisabledError,
     detect_source,
+    emit_market_data_routing_observation,
     fetch_market_data,
     get_loader,
     local_canonical_mode,
@@ -453,6 +455,7 @@ class PriceChartTool(BaseTool):
     requires_current_run_dir = True
 
     def execute(self, **kwargs: Any) -> str:
+        started_at = time.monotonic()
         raw_codes = kwargs.get("codes")
         if not isinstance(raw_codes, list):
             raise ValueError("codes must be an array")
@@ -566,6 +569,7 @@ class PriceChartTool(BaseTool):
                         interval=interval,
                         max_rows=0,
                         loader_resolver=lambda _source, cls=loader_cls: cls,
+                        emit_observation=False,
                     )
                 except Exception:
                     attempt["status"] = "unavailable"
@@ -711,6 +715,50 @@ class PriceChartTool(BaseTool):
 
         if created:
             _write_json(manifest_path, manifest[-20:])
+
+        route_observations: list[dict[str, Any]] = []
+        for symbol in codes:
+            resolved = symbol in source_by_symbol and symbol not in unresolved
+            attempts_for_symbol = source_attempts[symbol]
+            route_status = (
+                "success"
+                if resolved
+                else attempts_for_symbol[-1].get("status", "unresolved")
+                if attempts_for_symbol
+                else "unresolved"
+            )
+            fallback_reason = fallback_reason_by_symbol.get(symbol)
+            route_observations.append(
+                {
+                    "actual_source": source_by_symbol.get(symbol, "unknown"),
+                    "resolved": resolved,
+                    "status": route_status,
+                    "fallback": bool(fallback_reason),
+                    "fallback_reason": fallback_reason,
+                }
+            )
+        emit_market_data_routing_observation(
+            operation="show_price_chart",
+            requested_source=requested_source,
+            local_mode=local_mode,
+            interval=interval,
+            elapsed_ms=(time.monotonic() - started_at) * 1000,
+            symbol_count=len(codes),
+            resolved_count=len(created),
+            routes=route_observations,
+            attempts=(
+                attempt
+                for attempts_for_symbol in source_attempts.values()
+                for attempt in attempts_for_symbol
+            ),
+            error_statuses=(
+                attempt["status"]
+                for attempts_for_symbol in source_attempts.values()
+                for attempt in attempts_for_symbol
+                if attempt.get("status")
+                not in {"success", "no_data", "unsupported_interval"}
+            ),
+        )
 
         return json.dumps(
             {

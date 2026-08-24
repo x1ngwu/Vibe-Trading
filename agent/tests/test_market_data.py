@@ -10,6 +10,7 @@ network-free logic: source detection, row capping, JSON-safety, and the
 from __future__ import annotations
 
 import json
+import logging
 
 import numpy as np
 import pandas as pd
@@ -307,6 +308,77 @@ def test_auto_mode_incomplete_local_uses_one_network_source_with_reason(monkeypa
         out["_routing"]["600519.SH"]["fallback_reason"]
         == "local_coverage_incomplete"
     )
+
+
+def test_auto_routing_emits_symbol_free_structured_summary(monkeypatch, caplog) -> None:
+    monkeypatch.setenv("VIBE_LOCAL_CANONICAL_MODE", "auto")
+
+    def resolver(src: str):
+        return _IncompleteLocalLoader if src == "local_canonical" else _StubLoader
+
+    with caplog.at_level(logging.INFO, logger="src.market_data"):
+        fetch_market_data(
+            codes=["600519.SH"],
+            start_date="2025-01-01",
+            end_date="2026-01-02",
+            source="auto",
+            loader_resolver=resolver,
+        )
+
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("market_data_routing_summary ")
+    ]
+    assert len(messages) == 1
+    event = json.loads(messages[0].split(" ", 1)[1])
+    elapsed_ms = event.pop("elapsed_ms")
+    assert event == {
+        "event": "market_data_routing_summary",
+        "schema_version": 1,
+        "operation": "get_market_data",
+        "requested_source": "auto",
+        "local_mode": "auto",
+        "interval": "1D",
+        "symbol_count": 1,
+        "resolved_count": 1,
+        "unresolved_count": 0,
+        "local_count": 0,
+        "network_count": 1,
+        "fallback_count": 1,
+        "actual_source_counts": {"tencent": 1},
+        "route_status_counts": {"success": 1},
+        "fallback_reason_counts": {"local_coverage_incomplete": 1},
+        "attempt_source_counts": {"local_canonical": 1, "tencent": 1},
+        "attempt_status_counts": {"incomplete": 1, "success": 1},
+        "error_status_counts": {},
+    }
+    assert elapsed_ms >= 0
+    assert "600519" not in caplog.text
+    assert "2025-01-01" not in caplog.text
+    assert "2026-01-02" not in caplog.text
+
+
+def test_observation_sanitizes_untrusted_labels(caplog) -> None:
+    with caplog.at_level(logging.INFO, logger="src.market_data"):
+        fetch_market_data(
+            codes=[],
+            start_date="2026-01-01",
+            end_date="2026-01-02",
+            source="secret\nvalue",
+            interval="1D\nsecret",
+            loader_resolver=lambda _src: _StubLoader,
+        )
+
+    message = next(
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("market_data_routing_summary ")
+    )
+    event = json.loads(message.split(" ", 1)[1])
+    assert event["requested_source"] == "invalid_label"
+    assert event["interval"] == "invalid_label"
+    assert "secret" not in caplog.text
 
 
 def test_auto_mode_falls_back_only_missing_symbol_without_cross_source_seam(
